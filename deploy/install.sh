@@ -10,7 +10,7 @@ REPO_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 
 echo "==> Instalando dependencias del sistema"
 apt-get update
-apt-get install -y curl ca-certificates git build-essential python3
+apt-get install -y curl ca-certificates git build-essential python3 ffmpeg
 
 if ! command -v node >/dev/null || [ "$(node -v | cut -d. -f1 | tr -d v)" -lt 20 ]; then
   echo "==> Instalando Node.js 20 (NodeSource)"

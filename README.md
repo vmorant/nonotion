@@ -18,6 +18,7 @@ Webapp autoalojada tipo Notion, **sin límites de capacidad**: tus apuntes, resp
 - **Export ZIP completo** — descarga todo el workspace como Markdown + archivos adjuntos con enlaces relativos: backup portable, cero lock-in.
 - **Calendario propio (sin integraciones externas)** — vista mensual y semanal que muestra qué páginas creaste y editaste cada día (registro de actividad interno): de un vistazo ves en qué trabajaste y qué días no. Los datos antiguos se reconstruyen automáticamente desde el historial de versiones.
 - **Reuniones** — asigna una fecha a cualquier página y queda fijada ese día en el calendario (también fechas futuras). El botón "+" de un día crea una página de reunión con plantilla (asistentes, agenda, notas, acciones), y el comando `/reunión` inserta la misma plantilla en cualquier página.
+- **Grabación ligera de reuniones** — botón "⏺ Grabar" en cualquier página: captura pantalla + audio del sistema + micrófono desde el navegador con presets de tamaño controlado (solo audio ~20 MB/h, vídeo 720p/5fps ~90 MB/h), subida por chunks mientras grabas (resistente a caídas) y reproductor integrado. Indicador de espacio usado/libre en el sidebar.
 - **Integración con Cloudflare Access** — la app muestra el usuario autenticado leyendo la cabecera `Cf-Access-Authenticated-User-Email`. No hay login propio: Zero Trust es la puerta.
 - **Autoguardado** — todo se guarda solo mientras escribes.
 
@@ -136,6 +137,38 @@ La página aparece al instante en "📥 Inbox" (o bajo `NONOTION_PARENT` si lo d
 
 Para crear el service token: Zero Trust → Access → Service Auth → Create Service Token, y añade una política **Service Auth** a tu aplicación de Access que lo permita. Si llamas por IP local (LAN), no hace falta nada.
 
+## Grabar reuniones (Teams u otras)
+
+El grabador vive en la propia webapp: abre la página de la reunión, pulsa **⏺ Grabar**, elige preset y graba. No necesitas OBS ni nada instalado.
+
+| Preset | Configuración | Tamaño aprox. |
+| --- | --- | --- |
+| 🎙 Solo audio | Opus 48 kbps | **~20 MB/h** |
+| 📺 Ligero | 720p, 5 fps, VP9 ~220 kbps | **~90 MB/h** |
+| 🎬 Nítido | 720p, 15 fps, ~450 kbps | ~200 MB/h |
+
+Consejo contra el volumen: una reunión es contenido casi estático; **solo-audio o el preset ligero cubren el 95 % de los casos**. La grabación se sube por chunks mientras grabas (si se corta algo no la pierdes), queda adjunta a la página con reproductor integrado, y el contador en vivo te muestra MB y tasa estimada.
+
+**Con la app de escritorio de Teams** (el caso normal): en el selector del navegador elige **Pantalla completa** y marca **"Compartir también el audio del sistema"** — eso captura cualquier aplicación, incluida Teams de escritorio, más tu micrófono mezclado. Compartir una *ventana* suelta no incluye audio (limitación de Chromium). Requisitos: Chrome o Edge en Windows; el HTTPS lo pone tu túnel.
+
+Si hay `ffmpeg` en el LXC (el instalador lo añade), las grabaciones se remuxan al guardar para que la barra de progreso/seek funcione perfecta; sin ffmpeg también se guardan y reproducen.
+
+### Alternativa 100 % nativa: `nonotion-upload-media`
+
+Si prefieres grabar con otra cosa (Game Bar de Windows con `Win+Alt+R`, la grabación propia de Teams, OBS…), el script `cli/nonotion-upload-media.{sh,ps1}` recomprime el archivo a formato ligero con ffmpeg y lo sube como página de reunión:
+
+```powershell
+# Windows (requiere ffmpeg: winget install ffmpeg)
+.\nonotion-upload-media.ps1 reunion.mp4                 # solo audio (~20 MB/h)
+.\nonotion-upload-media.ps1 reunion.mp4 -Mode light     # 720p/5fps
+```
+
+Una grabación de Game Bar de 1 GB se queda en ~20-100 MB según el modo.
+
+### Y para el acta: Whisper + nonotion-send
+
+El combo que menos espacio ocupa: graba **solo audio**, pásalo por Whisper en tu PC de IA y sube la transcripción/acta con `nonotion-send` a la misma página. El audio original lo puedes borrar cuando tengas el acta.
+
 ## API
 
 | Método | Ruta | Descripción |
@@ -158,6 +191,8 @@ Para crear el service token: Zero Trust → Access → Service Auth → Create S
 | DELETE | `/api/trash/:id` | Eliminar definitivamente |
 | GET | `/api/export` | ZIP con todo el workspace (Markdown + archivos) |
 | GET | `/api/calendar?from=&to=` | Actividad y páginas con fecha por día (YYYY-MM-DD) |
+| POST | `/api/recordings/start` · `:id/chunk` · `:id/finish` | Subida de grabaciones por chunks |
+| GET | `/api/stats` | Espacio usado (archivos + BD) y libre en disco |
 
 Útil para automatizar: por ejemplo, un script en tu PC de IA puede crear páginas con respuestas de Claude vía `POST /api/pages` + `PUT` con el contenido (las llamadas dentro de la red de Zero Trust pueden usar un [service token de Access](https://developers.cloudflare.com/cloudflare-one/identity/service-tokens/)).
 
