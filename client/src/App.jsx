@@ -1,16 +1,19 @@
 import { useCallback, useEffect, useState } from 'react';
-import { Routes, Route, useNavigate } from 'react-router-dom';
+import { Routes, Route, useNavigate, useLocation } from 'react-router-dom';
 import { api } from './api.js';
 import Sidebar from './components/Sidebar.jsx';
 import PageView from './components/PageView.jsx';
 import SearchModal from './components/SearchModal.jsx';
+import TrashModal from './components/TrashModal.jsx';
 
 export default function App() {
   const [pages, setPages] = useState([]);
   const [me, setMe] = useState(null);
   const [searchOpen, setSearchOpen] = useState(false);
+  const [trashOpen, setTrashOpen] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const navigate = useNavigate();
+  const location = useLocation();
 
   const refreshTree = useCallback(async () => {
     setPages(await api.pages());
@@ -39,10 +42,24 @@ export default function App() {
   };
 
   const deletePage = async (id) => {
-    if (!confirm('¿Eliminar esta página y todas sus subpáginas y archivos?')) return;
     await api.deletePage(id);
     await refreshTree();
-    navigate('/');
+    if (location.pathname.includes(id)) navigate('/');
+  };
+
+  const duplicatePage = async (id) => {
+    const copy = await api.duplicatePage(id);
+    await refreshTree();
+    navigate(`/p/${copy.id}`);
+  };
+
+  const movePage = async (id, parentId, index) => {
+    try {
+      await api.movePage(id, parentId, index);
+    } catch {
+      // movimiento inválido (p. ej. un padre dentro de su hijo): se ignora
+    }
+    await refreshTree();
   };
 
   return (
@@ -53,8 +70,11 @@ export default function App() {
           me={me}
           onCreate={createPage}
           onDelete={deletePage}
+          onDuplicate={duplicatePage}
+          onMove={movePage}
           onSearch={() => setSearchOpen(true)}
           onCollapse={() => setSidebarOpen(false)}
+          onOpenTrash={() => setTrashOpen(true)}
         />
       )}
       <main className="main">
@@ -66,7 +86,15 @@ export default function App() {
         <Routes>
           <Route
             path="/p/:id"
-            element={<PageView pages={pages} onTreeChange={refreshTree} onDelete={deletePage} onCreateChild={createPage} />}
+            element={
+              <PageView
+                pages={pages}
+                onTreeChange={refreshTree}
+                onDelete={deletePage}
+                onCreateChild={createPage}
+                onDuplicate={duplicatePage}
+              />
+            }
           />
           <Route
             path="*"
@@ -79,6 +107,7 @@ export default function App() {
                   <li>Escribe <kbd>/</kbd> en una página para insertar bloques.</li>
                   <li>Arrastra archivos a una página para adjuntarlos.</li>
                   <li>Pulsa <kbd>Ctrl</kbd>+<kbd>K</kbd> para buscar.</li>
+                  <li>Envía respuestas desde tu PC de IA con <code>cli/nonotion-send.sh</code>.</li>
                 </ul>
                 <button className="btn primary" onClick={() => createPage(null)}>
                   + Crear una página
@@ -89,6 +118,7 @@ export default function App() {
         </Routes>
       </main>
       {searchOpen && <SearchModal onClose={() => setSearchOpen(false)} />}
+      {trashOpen && <TrashModal onClose={() => setTrashOpen(false)} onChanged={refreshTree} />}
     </div>
   );
 }

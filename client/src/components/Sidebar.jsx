@@ -1,18 +1,57 @@
 import { useState } from 'react';
 import { NavLink, useNavigate } from 'react-router-dom';
 
-function TreeItem({ page, childrenMap, depth, onCreate, onDelete }) {
+function TreeItem({ page, index, childrenMap, depth, onCreate, onDelete, onDuplicate, onMove }) {
   const [open, setOpen] = useState(depth < 1);
   const [menuOpen, setMenuOpen] = useState(false);
+  const [dropZone, setDropZone] = useState(null); // 'before' | 'inside' | 'after'
   const kids = childrenMap.get(page.id) || [];
   const navigate = useNavigate();
+
+  const zoneFromEvent = (e) => {
+    const rect = e.currentTarget.getBoundingClientRect();
+    const y = (e.clientY - rect.top) / rect.height;
+    if (y < 0.25) return 'before';
+    if (y > 0.75) return 'after';
+    return 'inside';
+  };
+
+  const handleDrop = (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    const draggedId = e.dataTransfer.getData('text/nonotion-page');
+    const zone = dropZone;
+    setDropZone(null);
+    if (!draggedId || draggedId === page.id) return;
+    if (zone === 'inside') {
+      onMove(draggedId, page.id, kids.length);
+      setOpen(true);
+    } else {
+      onMove(draggedId, page.parent_id, zone === 'before' ? index : index + 1);
+    }
+  };
 
   return (
     <div>
       <NavLink
         to={`/p/${page.id}`}
-        className={({ isActive }) => 'tree-item' + (isActive ? ' active' : '')}
+        className={({ isActive }) =>
+          'tree-item' + (isActive ? ' active' : '') + (dropZone ? ` drop-${dropZone}` : '')
+        }
         style={{ paddingLeft: 8 + depth * 14 }}
+        draggable
+        onDragStart={(e) => {
+          e.dataTransfer.setData('text/nonotion-page', page.id);
+          e.dataTransfer.effectAllowed = 'move';
+        }}
+        onDragOver={(e) => {
+          if (!e.dataTransfer.types.includes('text/nonotion-page')) return;
+          e.preventDefault();
+          e.stopPropagation();
+          setDropZone(zoneFromEvent(e));
+        }}
+        onDragLeave={() => setDropZone(null)}
+        onDrop={handleDrop}
       >
         <button
           className="tree-toggle"
@@ -66,25 +105,43 @@ function TreeItem({ page, childrenMap, depth, onCreate, onDelete }) {
             Añadir subpágina
           </button>
           <button
+            onClick={() => {
+              setMenuOpen(false);
+              onDuplicate(page.id);
+            }}
+          >
+            Duplicar
+          </button>
+          <button
             className="danger"
             onClick={() => {
               setMenuOpen(false);
               onDelete(page.id);
             }}
           >
-            Eliminar
+            Mover a la papelera
           </button>
         </div>
       )}
       {open &&
-        kids.map((k) => (
-          <TreeItem key={k.id} page={k} childrenMap={childrenMap} depth={depth + 1} onCreate={onCreate} onDelete={onDelete} />
+        kids.map((k, i) => (
+          <TreeItem
+            key={k.id}
+            page={k}
+            index={i}
+            childrenMap={childrenMap}
+            depth={depth + 1}
+            onCreate={onCreate}
+            onDelete={onDelete}
+            onDuplicate={onDuplicate}
+            onMove={onMove}
+          />
         ))}
     </div>
   );
 }
 
-export default function Sidebar({ pages, me, onCreate, onDelete, onSearch, onCollapse }) {
+export default function Sidebar({ pages, me, onCreate, onDelete, onDuplicate, onMove, onSearch, onCollapse, onOpenTrash }) {
   const childrenMap = new Map();
   for (const p of pages) {
     const key = p.parent_id || null;
@@ -111,12 +168,38 @@ export default function Sidebar({ pages, me, onCreate, onDelete, onSearch, onCol
             +
           </button>
         </div>
-        <div className="tree">
+        <div
+          className="tree"
+          onDragOver={(e) => {
+            if (e.dataTransfer.types.includes('text/nonotion-page')) e.preventDefault();
+          }}
+          onDrop={(e) => {
+            // Soltar en el espacio vacío del árbol = mover al final de la raíz
+            const draggedId = e.dataTransfer.getData('text/nonotion-page');
+            if (draggedId) onMove(draggedId, null, roots.length);
+          }}
+        >
           {roots.length === 0 && <div className="tree-empty">Sin páginas todavía</div>}
-          {roots.map((p) => (
-            <TreeItem key={p.id} page={p} childrenMap={childrenMap} depth={0} onCreate={onCreate} onDelete={onDelete} />
+          {roots.map((p, i) => (
+            <TreeItem
+              key={p.id}
+              page={p}
+              index={i}
+              childrenMap={childrenMap}
+              depth={0}
+              onCreate={onCreate}
+              onDelete={onDelete}
+              onDuplicate={onDuplicate}
+              onMove={onMove}
+            />
           ))}
         </div>
+      </div>
+      <div className="sidebar-tools">
+        <button onClick={onOpenTrash}>🗑 Papelera</button>
+        <button onClick={() => window.open('/api/export')} title="Descargar todo el workspace como Markdown + archivos">
+          ⬇ Exportar todo
+        </button>
       </div>
       <div className="sidebar-footer">
         {me?.email ? <span title="Sesión de Cloudflare Access">👤 {me.email}</span> : <span>Acceso local</span>}

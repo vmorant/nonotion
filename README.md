@@ -11,6 +11,11 @@ Webapp autoalojada tipo Notion, **sin límites de capacidad**: tus apuntes, resp
 - **Búsqueda instantánea** — `Ctrl+K` busca en títulos y contenido de todas las páginas (full-text con SQLite FTS5).
 - **Exportar a Markdown** — descarga cualquier página como `.md` con un clic.
 - **Enlaces públicos de solo lectura** — comparte una página concreta con quien quieras sin darle acceso a tu Zero Trust (requiere una regla de bypass, ver abajo).
+- **Captura desde el PC de IA** — `POST /api/capture` acepta Markdown directamente y el CLI `cli/nonotion-send.sh` (o `.ps1` en Windows) crea una página desde el portapapeles o stdin con un comando, sin abrir el navegador. Las capturas van a una página "📥 Inbox".
+- **Historial de versiones** — snapshots automáticos al editar (máx. uno cada 10 min, se conservan 50 por página) con vista previa y restauración, como el Page History de Notion.
+- **Papelera** — eliminar mueve a la papelera (con subpáginas y archivos); restaurable durante 30 días, después se purga automáticamente.
+- **Organiza arrastrando** — arrastra páginas en el árbol para reordenarlas o anidarlas; duplica páginas (subárbol y archivos incluidos) con un clic.
+- **Export ZIP completo** — descarga todo el workspace como Markdown + archivos adjuntos con enlaces relativos: backup portable, cero lock-in.
 - **Integración con Cloudflare Access** — la app muestra el usuario autenticado leyendo la cabecera `Cf-Access-Authenticated-User-Email`. No hay login propio: Zero Trust es la puerta.
 - **Autoguardado** — todo se guarda solo mientras escribes.
 
@@ -106,18 +111,50 @@ Los enlaces de "Compartir" (`/share/<token>`) son de solo lectura y usan tokens 
 3. Adjunta los archivos generados (scripts, datasets, etc.) arrastrándolos a la página.
 4. Si quieres pasárselo a alguien, activa el enlace público de esa página.
 
+### Aún más rápido: el CLI `nonotion-send`
+
+Copia el script `cli/nonotion-send.sh` a tu PC de IA (`~/.local/bin/nonotion-send`, `chmod +x`) y configura:
+
+```bash
+export NONOTION_URL=https://notas.tudominio.com
+# Solo si llamas a través del túnel (recomendado): service token de Access
+export CF_ACCESS_CLIENT_ID=xxxx.access
+export CF_ACCESS_CLIENT_SECRET=yyyy
+```
+
+Y a partir de ahí:
+
+```bash
+# Copia la respuesta de Claude y:
+nonotion-send "Script de backup"        # toma el portapapeles
+cat respuesta.md | nonotion-send        # o por stdin; el título se deriva del primer encabezado
+```
+
+La página aparece al instante en "📥 Inbox" (o bajo `NONOTION_PARENT` si lo defines). En Windows, `cli/nonotion-send.ps1` hace lo mismo con `Get-Clipboard`.
+
+Para crear el service token: Zero Trust → Access → Service Auth → Create Service Token, y añade una política **Service Auth** a tu aplicación de Access que lo permita. Si llamas por IP local (LAN), no hace falta nada.
+
 ## API
 
 | Método | Ruta | Descripción |
 | --- | --- | --- |
 | GET | `/api/pages` | Árbol de páginas |
 | POST | `/api/pages` | Crear página (`parent_id` opcional) |
-| GET/PUT/DELETE | `/api/pages/:id` | Leer / actualizar / eliminar (recursivo) |
+| GET/PUT/DELETE | `/api/pages/:id` | Leer / actualizar / mover a papelera (recursivo) |
 | POST | `/api/files` | Subir archivo (multipart, `page_id`) |
 | GET | `/files/:id/:nombre` | Descargar / ver archivo |
 | GET | `/api/search?q=` | Búsqueda full-text |
 | POST/DELETE | `/api/pages/:id/share` | Activar / desactivar enlace público |
 | GET | `/api/share/:token` | Página compartida (pública) |
+| POST | `/api/capture` | Crear página desde Markdown (`{markdown, title?, parent_id?}`) |
+| POST | `/api/pages/:id/move` | Mover en el árbol (`{parent_id, index}`) |
+| POST | `/api/pages/:id/duplicate` | Duplicar subárbol con archivos |
+| GET | `/api/pages/:id/versions` | Historial de versiones |
+| POST | `/api/pages/:id/restore-version/:vid` | Restaurar una versión |
+| GET/DELETE | `/api/trash` | Listar / vaciar papelera |
+| POST | `/api/trash/:id/restore` | Restaurar de la papelera |
+| DELETE | `/api/trash/:id` | Eliminar definitivamente |
+| GET | `/api/export` | ZIP con todo el workspace (Markdown + archivos) |
 
 Útil para automatizar: por ejemplo, un script en tu PC de IA puede crear páginas con respuestas de Claude vía `POST /api/pages` + `PUT` con el contenido (las llamadas dentro de la red de Zero Trust pueden usar un [service token de Access](https://developers.cloudflare.com/cloudflare-one/identity/service-tokens/)).
 

@@ -22,6 +22,16 @@ export const api = {
   unshare: (id) => req(`/api/pages/${id}/share`, { method: 'DELETE' }),
   sharedPage: (token) => req(`/api/share/${token}`),
   deleteFile: (id) => req(`/api/files/${id}`, { method: 'DELETE' }),
+  movePage: (id, parentId, index) =>
+    req(`/api/pages/${id}/move`, { method: 'POST', body: JSON.stringify({ parent_id: parentId, index }) }),
+  duplicatePage: (id) => req(`/api/pages/${id}/duplicate`, { method: 'POST' }),
+  trash: () => req('/api/trash'),
+  restoreTrash: (id) => req(`/api/trash/${id}/restore`, { method: 'POST' }),
+  deleteTrashItem: (id) => req(`/api/trash/${id}`, { method: 'DELETE' }),
+  emptyTrash: () => req('/api/trash', { method: 'DELETE' }),
+  versions: (pageId) => req(`/api/pages/${pageId}/versions`),
+  version: (vid) => req(`/api/versions/${vid}`),
+  restoreVersion: (pageId, vid) => req(`/api/pages/${pageId}/restore-version/${vid}`, { method: 'POST' }),
   uploadFile: (file, pageId) => {
     const fd = new FormData();
     fd.append('page_id', pageId || '');
@@ -29,6 +39,19 @@ export const api = {
     return req('/api/files', { method: 'POST', body: fd });
   },
 };
+
+// El content de una página puede ser JSON Tiptap o Markdown crudo (páginas capturadas vía API)
+export function parseContent(content) {
+  if (!content) return '';
+  if (typeof content === 'string' && content.trim().startsWith('{')) {
+    try {
+      return JSON.parse(content);
+    } catch {
+      return content;
+    }
+  }
+  return content;
+}
 
 export function humanSize(bytes) {
   if (bytes == null) return '';

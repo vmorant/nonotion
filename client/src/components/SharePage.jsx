@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useParams } from 'react-router-dom';
 import { useEditor, EditorContent } from '@tiptap/react';
-import { api, humanSize } from '../api.js';
+import { api, humanSize, parseContent } from '../api.js';
 import { baseExtensions } from './Editor.jsx';
 
 export default function SharePage() {
@@ -13,12 +13,7 @@ export default function SharePage() {
     api.sharedPage(token).then(setPage).catch((e) => setError(e.message));
   }, [token]);
 
-  let content = '';
-  try {
-    content = page?.content ? JSON.parse(page.content) : '';
-  } catch {
-    content = page?.content || '';
-  }
+  const content = parseContent(page?.content);
 
   const editor = useEditor(
     {

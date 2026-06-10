@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useParams, Link } from 'react-router-dom';
-import { api } from '../api.js';
+import { api, parseContent } from '../api.js';
 import Editor from './Editor.jsx';
 import Attachments from './Attachments.jsx';
 import EmojiPicker from './EmojiPicker.jsx';
+import HistoryModal from './HistoryModal.jsx';
 
 function breadcrumb(pages, id) {
   const byId = new Map(pages.map((p) => [p.id, p]));
@@ -16,30 +17,37 @@ function breadcrumb(pages, id) {
   return chain;
 }
 
-export default function PageView({ pages, onTreeChange, onDelete, onCreateChild }) {
+export default function PageView({ pages, onTreeChange, onDelete, onCreateChild, onDuplicate }) {
   const { id } = useParams();
   const [page, setPage] = useState(null);
   const [files, setFiles] = useState([]);
   const [status, setStatus] = useState('saved'); // saved | saving | error
   const [emojiOpen, setEmojiOpen] = useState(false);
   const [shareOpen, setShareOpen] = useState(false);
+  const [historyOpen, setHistoryOpen] = useState(false);
   const [shareToken, setShareToken] = useState(null);
   const [copied, setCopied] = useState(false);
+  const [reloadKey, setReloadKey] = useState(0);
   const editorRef = useRef(null);
   const saveTimer = useRef(null);
   const pending = useRef({});
 
-  useEffect(() => {
-    setPage(null);
-    api.page(id).then((p) => {
+  const loadPage = useCallback(() => {
+    return api.page(id).then((p) => {
       setPage(p);
       setFiles(p.files || []);
       setShareToken(p.share_token);
-      setShareOpen(false);
-      setEmojiOpen(false);
     });
-    return () => clearTimeout(saveTimer.current);
   }, [id]);
+
+  useEffect(() => {
+    setPage(null);
+    setShareOpen(false);
+    setEmojiOpen(false);
+    setHistoryOpen(false);
+    loadPage();
+    return () => clearTimeout(saveTimer.current);
+  }, [loadPage]);
 
   const flush = useCallback(async () => {
     const data = pending.current;
@@ -98,12 +106,14 @@ export default function PageView({ pages, onTreeChange, onDelete, onCreateChild 
     URL.revokeObjectURL(a.href);
   };
 
-  let initialContent = '';
-  try {
-    initialContent = page.content ? JSON.parse(page.content) : '';
-  } catch {
-    initialContent = page.content;
-  }
+  const onVersionRestored = async () => {
+    setHistoryOpen(false);
+    clearTimeout(saveTimer.current);
+    pending.current = {};
+    await loadPage();
+    setReloadKey((k) => k + 1);
+    onTreeChange();
+  };
 
   return (
     <div className="page">
@@ -123,6 +133,9 @@ export default function PageView({ pages, onTreeChange, onDelete, onCreateChild 
           <span className={`save-status ${status}`}>
             {status === 'saving' ? 'Guardando…' : status === 'error' ? '⚠ Error al guardar' : 'Guardado'}
           </span>
+          <button className="btn" onClick={() => setHistoryOpen(true)} title="Historial de versiones">
+            🕘
+          </button>
           <button className="btn" onClick={exportMarkdown} title="Exportar como Markdown">
             ⬇ MD
           </button>
@@ -156,7 +169,10 @@ export default function PageView({ pages, onTreeChange, onDelete, onCreateChild 
           <button className="btn" onClick={() => onCreateChild(id)} title="Añadir subpágina">
             + Sub
           </button>
-          <button className="btn danger" onClick={() => onDelete(id)} title="Eliminar página">
+          <button className="btn" onClick={() => onDuplicate(id)} title="Duplicar página">
+            ⧉
+          </button>
+          <button className="btn danger" onClick={() => onDelete(id)} title="Mover a la papelera">
             🗑
           </button>
         </div>
@@ -189,9 +205,9 @@ export default function PageView({ pages, onTreeChange, onDelete, onCreateChild 
         </div>
 
         <Editor
-          key={id}
+          key={`${id}:${reloadKey}`}
           pageId={id}
-          initialContent={initialContent}
+          initialContent={parseContent(page.content)}
           onReady={(ed) => (editorRef.current = ed)}
           onChange={({ json, text }) => queueSave({ content: json, content_text: text })}
           onFileUploaded={(f) => setFiles((prev) => [...prev, f])}
@@ -199,6 +215,8 @@ export default function PageView({ pages, onTreeChange, onDelete, onCreateChild 
 
         <Attachments pageId={id} files={files} onChange={setFiles} />
       </div>
+
+      {historyOpen && <HistoryModal pageId={id} onClose={() => setHistoryOpen(false)} onRestored={onVersionRestored} />}
     </div>
   );
 }
