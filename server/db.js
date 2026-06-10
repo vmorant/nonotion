@@ -55,6 +55,42 @@ const pageCols = db.prepare('PRAGMA table_info(pages)').all().map((c) => c.name)
 if (!pageCols.includes('trashed_at')) {
   db.exec('ALTER TABLE pages ADD COLUMN trashed_at TEXT');
 }
+// Fecha asignada (reuniones, eventos): la página queda fijada a ese día en el calendario
+if (!pageCols.includes('page_date')) {
+  db.exec('ALTER TABLE pages ADD COLUMN page_date TEXT');
+  db.exec('CREATE INDEX IF NOT EXISTS idx_pages_date ON pages(page_date)');
+}
+
+// Registro de actividad: una fila por página y día con ediciones
+db.exec(`
+CREATE TABLE IF NOT EXISTS activity (
+  page_id TEXT NOT NULL REFERENCES pages(id) ON DELETE CASCADE,
+  day TEXT NOT NULL,
+  edits INTEGER NOT NULL DEFAULT 1,
+  last_at TEXT NOT NULL DEFAULT (datetime('now')),
+  PRIMARY KEY (page_id, day)
+);
+CREATE INDEX IF NOT EXISTS idx_activity_day ON activity(day);
+`);
+
+// Backfill inicial: reconstruye actividad pasada desde el historial de
+// versiones y la última modificación de cada página
+if (!db.prepare('SELECT 1 FROM activity LIMIT 1').get()) {
+  db.exec(`
+    INSERT OR IGNORE INTO activity (page_id, day, edits, last_at)
+    SELECT page_id, date(created_at, 'localtime'), 1, created_at FROM versions;
+    INSERT OR IGNORE INTO activity (page_id, day, edits, last_at)
+    SELECT id, date(updated_at, 'localtime'), 1, updated_at FROM pages
+    WHERE updated_at != created_at;
+  `);
+}
+
+export function logActivity(pageId) {
+  db.prepare(
+    `INSERT INTO activity (page_id, day) VALUES (?, date('now', 'localtime'))
+     ON CONFLICT(page_id, day) DO UPDATE SET edits = edits + 1, last_at = datetime('now')`
+  ).run(pageId);
+}
 
 export function ftsUpsert(pageId, title, body) {
   db.prepare('DELETE FROM pages_fts WHERE page_id = ?').run(pageId);

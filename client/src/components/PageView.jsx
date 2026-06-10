@@ -133,6 +133,17 @@ export default function PageView({ pages, onTreeChange, onDelete, onCreateChild,
           <span className={`save-status ${status}`}>
             {status === 'saving' ? 'Guardando…' : status === 'error' ? '⚠ Error al guardar' : 'Guardado'}
           </span>
+          <input
+            type="date"
+            className={'page-date' + (page.page_date ? ' set' : '')}
+            value={page.page_date || ''}
+            title="Fecha asignada: la página aparece fijada ese día en el calendario"
+            onChange={(e) => {
+              const v = e.target.value || null;
+              setPage({ ...page, page_date: v });
+              queueSave({ page_date: v });
+            }}
+          />
           <button className="btn" onClick={() => setHistoryOpen(true)} title="Historial de versiones">
             🕘
           </button>

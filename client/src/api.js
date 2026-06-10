@@ -29,6 +29,7 @@ export const api = {
   restoreTrash: (id) => req(`/api/trash/${id}/restore`, { method: 'POST' }),
   deleteTrashItem: (id) => req(`/api/trash/${id}`, { method: 'DELETE' }),
   emptyTrash: () => req('/api/trash', { method: 'DELETE' }),
+  calendar: (from, to) => req(`/api/calendar?from=${from}&to=${to}`),
   versions: (pageId) => req(`/api/pages/${pageId}/versions`),
   version: (vid) => req(`/api/versions/${vid}`),
   restoreVersion: (pageId, vid) => req(`/api/pages/${pageId}/restore-version/${vid}`, { method: 'POST' }),

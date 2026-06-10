@@ -4,7 +4,7 @@ import fs from 'fs';
 import multer from 'multer';
 import { nanoid } from 'nanoid';
 import { fileURLToPath } from 'url';
-import db, { FILES_DIR, ftsUpsert, ftsDelete, extractText } from './db.js';
+import db, { FILES_DIR, ftsUpsert, ftsDelete, extractText, logActivity } from './db.js';
 import { docToMarkdown } from './markdown.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -66,7 +66,7 @@ app.get('/api/me', (req, res) => {
 app.get('/api/pages', (req, res) => {
   const rows = db
     .prepare(
-      `SELECT id, parent_id, title, icon, position, updated_at,
+      `SELECT id, parent_id, title, icon, position, updated_at, page_date,
               share_token IS NOT NULL AS shared
        FROM pages WHERE trashed_at IS NULL ORDER BY position, created_at`
     )
@@ -74,19 +74,20 @@ app.get('/api/pages', (req, res) => {
   res.json(rows);
 });
 
+const validDate = (v) => (typeof v === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(v) ? v : null);
+
 app.post('/api/pages', (req, res) => {
-  const { parent_id = null, title = '' } = req.body || {};
+  const { parent_id = null, title = '', icon = '', content = null, page_date = null } = req.body || {};
   const id = nanoid(12);
   const pos = db
     .prepare('SELECT COALESCE(MAX(position) + 1, 0) AS p FROM pages WHERE parent_id IS ?')
     .get(parent_id).p;
-  db.prepare('INSERT INTO pages (id, parent_id, title, position) VALUES (?, ?, ?, ?)').run(
-    id,
-    parent_id,
-    title,
-    pos
-  );
-  ftsUpsert(id, title, '');
+  // content opcional como string: markdown crudo (mismo mecanismo que /api/capture)
+  const raw = typeof content === 'string' ? content : '';
+  db.prepare(
+    'INSERT INTO pages (id, parent_id, title, icon, content, content_text, position, page_date) VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
+  ).run(id, parent_id, title, icon, raw, raw, pos, validDate(page_date));
+  ftsUpsert(id, title, raw);
   res.json(db.prepare('SELECT * FROM pages WHERE id = ?').get(id));
 });
 
@@ -131,6 +132,7 @@ app.put('/api/pages/:id', (req, res) => {
   if (b.content !== undefined) fields.content = typeof b.content === 'string' ? b.content : JSON.stringify(b.content);
   if (typeof b.content_text === 'string') fields.content_text = b.content_text;
   if (typeof b.position === 'number') fields.position = b.position;
+  if (b.page_date !== undefined) fields.page_date = validDate(b.page_date);
   if (b.parent_id !== undefined) {
     if (b.parent_id !== null) {
       if (b.parent_id === page.id || isDescendant(b.parent_id, page.id)) {
@@ -157,6 +159,9 @@ app.put('/api/pages/:id', (req, res) => {
   const updated = db.prepare('SELECT * FROM pages WHERE id = ?').get(page.id);
   if (fields.title !== undefined || fields.content_text !== undefined) {
     ftsUpsert(page.id, updated.title, updated.content_text);
+  }
+  if (fields.content !== undefined || fields.title !== undefined) {
+    logActivity(page.id);
   }
   res.json(updated);
 });
@@ -355,7 +360,37 @@ app.post('/api/pages/:id/restore-version/:vid', (req, res) => {
     `UPDATE pages SET title = ?, content = ?, content_text = ?, updated_at = datetime('now') WHERE id = ?`
   ).run(v.title, v.content, text, page.id);
   ftsUpsert(page.id, v.title, text);
+  logActivity(page.id);
   res.json(db.prepare('SELECT * FROM pages WHERE id = ?').get(page.id));
+});
+
+// ---------- Calendario (actividad + páginas con fecha) ----------
+
+app.get('/api/calendar', (req, res) => {
+  const from = validDate(req.query.from);
+  const to = validDate(req.query.to);
+  if (!from || !to) return res.status(400).json({ error: 'Parámetros from/to inválidos (YYYY-MM-DD)' });
+  const dated = db
+    .prepare(
+      `SELECT id, title, icon, page_date AS day FROM pages
+       WHERE trashed_at IS NULL AND page_date BETWEEN ? AND ?`
+    )
+    .all(from, to);
+  const created = db
+    .prepare(
+      `SELECT id, title, icon, date(created_at, 'localtime') AS day FROM pages
+       WHERE trashed_at IS NULL AND date(created_at, 'localtime') BETWEEN ? AND ?`
+    )
+    .all(from, to);
+  const edited = db
+    .prepare(
+      `SELECT p.id, p.title, p.icon, a.day, a.edits FROM activity a
+       JOIN pages p ON p.id = a.page_id
+       WHERE p.trashed_at IS NULL AND a.day BETWEEN ? AND ?
+         AND a.day != date(p.created_at, 'localtime')`
+    )
+    .all(from, to);
+  res.json({ dated, created, edited });
 });
 
 // ---------- Captura desde el PC de IA ----------

@@ -81,6 +81,31 @@ const ITEMS = [
     run: (e, r) => e.chain().focus().deleteRange(r).setHorizontalRule().run(),
   },
   {
+    title: 'Reunión',
+    hint: 'Plantilla: asistentes, agenda, notas y acciones',
+    icon: '🗓',
+    keywords: 'reunion meeting plantilla template acta',
+    run: (e, r) =>
+      e
+        .chain()
+        .focus()
+        .deleteRange(r)
+        .insertContent([
+          { type: 'heading', attrs: { level: 2 }, content: [{ type: 'text', text: '👥 Asistentes' }] },
+          { type: 'bulletList', content: [{ type: 'listItem', content: [{ type: 'paragraph' }] }] },
+          { type: 'heading', attrs: { level: 2 }, content: [{ type: 'text', text: '📋 Agenda' }] },
+          { type: 'bulletList', content: [{ type: 'listItem', content: [{ type: 'paragraph' }] }] },
+          { type: 'heading', attrs: { level: 2 }, content: [{ type: 'text', text: '📝 Notas' }] },
+          { type: 'paragraph' },
+          { type: 'heading', attrs: { level: 2 }, content: [{ type: 'text', text: '✅ Acciones' }] },
+          {
+            type: 'taskList',
+            content: [{ type: 'taskItem', attrs: { checked: false }, content: [{ type: 'paragraph' }] }],
+          },
+        ])
+        .run(),
+  },
+  {
     title: 'Imagen',
     hint: 'Subir una imagen',
     icon: '🖼',

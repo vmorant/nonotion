@@ -196,6 +196,9 @@ export default function Sidebar({ pages, me, onCreate, onDelete, onDuplicate, on
         </div>
       </div>
       <div className="sidebar-tools">
+        <NavLink to="/calendar" className={({ isActive }) => 'sidebar-tool-link' + (isActive ? ' active' : '')}>
+          📅 Calendario
+        </NavLink>
         <button onClick={onOpenTrash}>🗑 Papelera</button>
         <button onClick={() => window.open('/api/export')} title="Descargar todo el workspace como Markdown + archivos">
           ⬇ Exportar todo

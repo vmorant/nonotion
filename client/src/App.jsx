@@ -5,6 +5,7 @@ import Sidebar from './components/Sidebar.jsx';
 import PageView from './components/PageView.jsx';
 import SearchModal from './components/SearchModal.jsx';
 import TrashModal from './components/TrashModal.jsx';
+import CalendarView from './components/CalendarView.jsx';
 
 export default function App() {
   const [pages, setPages] = useState([]);
@@ -96,6 +97,7 @@ export default function App() {
               />
             }
           />
+          <Route path="/calendar" element={<CalendarView />} />
           <Route
             path="*"
             element={

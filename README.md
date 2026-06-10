@@ -16,6 +16,8 @@ Webapp autoalojada tipo Notion, **sin límites de capacidad**: tus apuntes, resp
 - **Papelera** — eliminar mueve a la papelera (con subpáginas y archivos); restaurable durante 30 días, después se purga automáticamente.
 - **Organiza arrastrando** — arrastra páginas en el árbol para reordenarlas o anidarlas; duplica páginas (subárbol y archivos incluidos) con un clic.
 - **Export ZIP completo** — descarga todo el workspace como Markdown + archivos adjuntos con enlaces relativos: backup portable, cero lock-in.
+- **Calendario propio (sin integraciones externas)** — vista mensual y semanal que muestra qué páginas creaste y editaste cada día (registro de actividad interno): de un vistazo ves en qué trabajaste y qué días no. Los datos antiguos se reconstruyen automáticamente desde el historial de versiones.
+- **Reuniones** — asigna una fecha a cualquier página y queda fijada ese día en el calendario (también fechas futuras). El botón "+" de un día crea una página de reunión con plantilla (asistentes, agenda, notas, acciones), y el comando `/reunión` inserta la misma plantilla en cualquier página.
 - **Integración con Cloudflare Access** — la app muestra el usuario autenticado leyendo la cabecera `Cf-Access-Authenticated-User-Email`. No hay login propio: Zero Trust es la puerta.
 - **Autoguardado** — todo se guarda solo mientras escribes.
 
@@ -155,6 +157,7 @@ Para crear el service token: Zero Trust → Access → Service Auth → Create S
 | POST | `/api/trash/:id/restore` | Restaurar de la papelera |
 | DELETE | `/api/trash/:id` | Eliminar definitivamente |
 | GET | `/api/export` | ZIP con todo el workspace (Markdown + archivos) |
+| GET | `/api/calendar?from=&to=` | Actividad y páginas con fecha por día (YYYY-MM-DD) |
 
 Útil para automatizar: por ejemplo, un script en tu PC de IA puede crear páginas con respuestas de Claude vía `POST /api/pages` + `PUT` con el contenido (las llamadas dentro de la red de Zero Trust pueden usar un [service token de Access](https://developers.cloudflare.com/cloudflare-one/identity/service-tokens/)).
 
