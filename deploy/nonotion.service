@@ -1,0 +1,23 @@
+[Unit]
+Description=NoNotion - apuntes, IA y archivos autoalojados
+After=network.target
+
+[Service]
+Type=simple
+User=nonotion
+Group=nonotion
+WorkingDirectory=/opt/nonotion
+Environment=NODE_ENV=production
+Environment=PORT=3000
+Environment=DATA_DIR=/var/lib/nonotion
+ExecStart=/usr/bin/node server/index.js
+Restart=always
+RestartSec=3
+
+# Endurecimiento básico
+NoNewPrivileges=true
+ProtectSystem=full
+ReadWritePaths=/var/lib/nonotion
+
+[Install]
+WantedBy=multi-user.target
