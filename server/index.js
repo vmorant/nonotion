@@ -6,6 +6,7 @@ import { nanoid } from 'nanoid';
 import { fileURLToPath } from 'url';
 import db, { FILES_DIR, ftsUpsert, ftsDelete, extractText, logActivity } from './db.js';
 import { docToMarkdown } from './markdown.js';
+import { mountMcp } from './mcp.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PORT = process.env.PORT || 3000;
@@ -414,7 +415,7 @@ function getOrCreateInbox() {
 }
 
 app.post('/api/capture', (req, res) => {
-  const { markdown, title, parent_id } = req.body || {};
+  const { markdown, title, parent_id, page_date, icon } = req.body || {};
   if (typeof markdown !== 'string' || !markdown.trim()) {
     return res.status(400).json({ error: 'Falta el campo "markdown"' });
   }
@@ -431,10 +432,50 @@ app.post('/api/capture', (req, res) => {
     .get(parentId).p;
   // Se guarda el markdown crudo: el editor lo convierte a bloques al abrirlo
   db.prepare(
-    'INSERT INTO pages (id, parent_id, title, icon, content, content_text, position) VALUES (?, ?, ?, ?, ?, ?, ?)'
-  ).run(id, parentId, pageTitle, '🤖', markdown, markdown, pos);
+    'INSERT INTO pages (id, parent_id, title, icon, content, content_text, position, page_date) VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
+  ).run(id, parentId, pageTitle, typeof icon === 'string' && icon ? icon : '🤖', markdown, markdown, pos, validDate(page_date));
   ftsUpsert(id, pageTitle, markdown);
   res.json({ id, title: pageTitle, url: `/p/${id}` });
+});
+
+// ---------- Lectura/escritura en Markdown (usada por el MCP) ----------
+
+app.get('/api/pages/:id/markdown', async (req, res) => {
+  const page = db.prepare('SELECT * FROM pages WHERE id = ?').get(req.params.id);
+  if (!page) return res.status(404).json({ error: 'Página no encontrada' });
+  const markdown = await docToMarkdown(page.content);
+  const files = db
+    .prepare('SELECT id, name, mime, size FROM files WHERE page_id = ? ORDER BY created_at')
+    .all(page.id);
+  res.json({
+    id: page.id,
+    title: page.title,
+    icon: page.icon,
+    page_date: page.page_date,
+    parent_id: page.parent_id,
+    updated_at: page.updated_at,
+    trashed: !!page.trashed_at,
+    markdown,
+    files,
+  });
+});
+
+app.post('/api/pages/:id/append', async (req, res) => {
+  const page = db.prepare('SELECT * FROM pages WHERE id = ?').get(req.params.id);
+  if (!page) return res.status(404).json({ error: 'Página no encontrada' });
+  const { markdown } = req.body || {};
+  if (typeof markdown !== 'string' || !markdown.trim()) {
+    return res.status(400).json({ error: 'Falta el campo "markdown"' });
+  }
+  if (page.content) snapshotVersion(page, { throttled: true });
+  const current = await docToMarkdown(page.content);
+  const combined = current ? `${current.replace(/\s+$/, '')}\n\n${markdown}` : markdown;
+  db.prepare(
+    `UPDATE pages SET content = ?, content_text = ?, updated_at = datetime('now') WHERE id = ?`
+  ).run(combined, combined, page.id);
+  ftsUpsert(page.id, page.title, combined);
+  logActivity(page.id);
+  res.json(db.prepare('SELECT * FROM pages WHERE id = ?').get(page.id));
 });
 
 // ---------- Archivos ----------
@@ -629,6 +670,10 @@ app.get('/api/export', async (req, res) => {
 
   await archive.finalize();
 });
+
+// ---------- MCP remoto (Claude lee y escribe en NoNotion) ----------
+
+mountMcp(app, PORT);
 
 // ---------- Frontend estático (producción) ----------
 

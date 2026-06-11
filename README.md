@@ -136,6 +136,53 @@ La página aparece al instante en "📥 Inbox" (o bajo `NONOTION_PARENT` si lo d
 
 Para crear el service token: Zero Trust → Access → Service Auth → Create Service Token, y añade una política **Service Auth** a tu aplicación de Access que lo permita. Si llamas por IP local (LAN), no hace falta nada.
 
+## MCP: conecta Claude a NoNotion
+
+NoNotion expone un **servidor MCP remoto** en `https://notas.tudominio.com/mcp/<token>`: Claude puede buscar, leer, crear y modificar páginas y adjuntos directamente — sin copiar y pegar. Funciona desde claude.ai, la app móvil, Claude Desktop y Claude Code.
+
+### El token
+
+Se genera automáticamente al arrancar y se guarda en `DATA_DIR/mcp_token` (por defecto `/var/lib/nonotion/mcp_token`). Para verlo:
+
+```bash
+cat /var/lib/nonotion/mcp_token      # o: journalctl -u nonotion | grep MCP
+```
+
+Para rotarlo: borra el archivo y reinicia (`systemctl restart nonotion`).
+
+> ⚠️ **La URL es la credencial**: quien tenga `https://.../mcp/<token>` puede leer y escribir todo tu workspace. No la compartas ni la pegues en sitios públicos.
+
+### Cloudflare Access
+
+Los clientes MCP no pueden pasar el login de Zero Trust, así que crea una aplicación en Access con política **Bypass** para `notas.tudominio.com/mcp/*` (igual que la de `/share/*`). La protección real es el token de la URL.
+
+### Registrar el conector
+
+- **claude.ai / Claude Desktop / app móvil**: Ajustes → Conectores → *Add custom connector* → pega `https://notas.tudominio.com/mcp/<token>`.
+- **Claude Code**:
+
+  ```bash
+  claude mcp add --transport http nonotion https://notas.tudominio.com/mcp/<token>
+  ```
+
+### Herramientas disponibles
+
+| Herramienta | Qué hace |
+| --- | --- |
+| `search_pages` / `list_pages` | Buscar por texto / ver el árbol completo |
+| `read_page` | Leer una página en Markdown + sus adjuntos |
+| `create_page` | Crear página (Markdown, fecha y emoji opcionales; sin padre → Inbox) |
+| `append_to_page` | Añadir al final sin tocar lo existente (la habitual) |
+| `edit_page` | Sustituir un fragmento exacto del Markdown |
+| `update_page` | Reescribir contenido/título/icono/fecha (queda versión anterior en el historial) |
+| `trash_page` | Mover a la papelera (reversible; no existe borrado definitivo vía MCP) |
+| `read_attachment` | Leer adjuntos: texto/código y también imágenes |
+| `attach_file` | Subir un archivo (código generado, configs…) a una página |
+
+### Skill recomendada
+
+En `skills/nonotion/SKILL.md` hay una skill lista para tu Claude: cópiala a `~/.claude/skills/nonotion/` (Claude Code) o añádela como skill en claude.ai. Define el flujo de trabajo conversacional: Claude **solo escribe cuando tú se lo pides**, mantiene una *página de trabajo* por conversación y la amplía (`append_to_page`) o retoca (`edit_page`) en vez de crear páginas nuevas a cada respuesta.
+
 ## API
 
 | Método | Ruta | Descripción |
@@ -158,6 +205,9 @@ Para crear el service token: Zero Trust → Access → Service Auth → Create S
 | DELETE | `/api/trash/:id` | Eliminar definitivamente |
 | GET | `/api/export` | ZIP con todo el workspace (Markdown + archivos) |
 | GET | `/api/calendar?from=&to=` | Actividad y páginas con fecha por día (YYYY-MM-DD) |
+| GET | `/api/pages/:id/markdown` | Página convertida a Markdown + adjuntos |
+| POST | `/api/pages/:id/append` | Añadir Markdown al final (con snapshot de versión) |
+| POST | `/mcp/:token` | Servidor MCP remoto (Streamable HTTP) |
 
 Útil para automatizar: por ejemplo, un script en tu PC de IA puede crear páginas con respuestas de Claude vía `POST /api/pages` + `PUT` con el contenido (las llamadas dentro de la red de Zero Trust pueden usar un [service token de Access](https://developers.cloudflare.com/cloudflare-one/identity/service-tokens/)).
 
