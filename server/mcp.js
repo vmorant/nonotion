@@ -361,12 +361,20 @@ export function mountMcp(app, port) {
   });
 
   // En modo stateless no hay stream de notificaciones ni sesiones que cerrar
-  const reject = (req, res) =>
+  const reject = (req, res) => {
+    if (req.params.token !== token) {
+      return res.status(401).json({
+        jsonrpc: '2.0',
+        error: { code: -32001, message: 'Token MCP inválido' },
+        id: null,
+      });
+    }
     res.status(405).json({
       jsonrpc: '2.0',
       error: { code: -32000, message: 'Método no permitido (servidor MCP sin estado)' },
       id: null,
     });
+  };
   app.get('/mcp/:token', reject);
   app.delete('/mcp/:token', reject);
 
