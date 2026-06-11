@@ -1,5 +1,6 @@
 import { useRef, useState } from 'react';
 import { api, humanSize } from '../api.js';
+import FileViewer, { previewKind } from './FileViewer.jsx';
 
 function fileIcon(mime = '') {
   if (mime.startsWith('image/')) return '🖼️';
@@ -15,6 +16,7 @@ export default function Attachments({ pageId, files, onChange }) {
   const inputRef = useRef(null);
   const [dragOver, setDragOver] = useState(false);
   const [uploading, setUploading] = useState(false);
+  const [viewing, setViewing] = useState(null);
 
   const uploadFiles = async (list) => {
     setUploading(true);
@@ -60,7 +62,19 @@ export default function Attachments({ pageId, files, onChange }) {
         {files.map((f) => (
           <li key={f.id} className="file-item">
             <span className="file-icon">{fileIcon(f.mime)}</span>
-            <a href={`/files/${f.id}/${encodeURIComponent(f.name)}`} target="_blank" rel="noreferrer" className="file-name">
+            <a
+              href={`/files/${f.id}/${encodeURIComponent(f.name)}`}
+              target="_blank"
+              rel="noreferrer"
+              className="file-name"
+              title={previewKind(f) ? 'Ver' : 'Abrir'}
+              onClick={(e) => {
+                if (previewKind(f)) {
+                  e.preventDefault();
+                  setViewing(f);
+                }
+              }}
+            >
               {f.name}
             </a>
             <span className="file-size">{humanSize(f.size)}</span>
@@ -70,6 +84,7 @@ export default function Attachments({ pageId, files, onChange }) {
           </li>
         ))}
       </ul>
+      {viewing && <FileViewer file={viewing} onClose={() => setViewing(null)} />}
       <input
         ref={inputRef}
         type="file"

@@ -1,10 +1,12 @@
 import express from 'express';
 import path from 'path';
 import fs from 'fs';
+import os from 'os';
 import multer from 'multer';
 import { nanoid } from 'nanoid';
 import { fileURLToPath } from 'url';
-import db, { FILES_DIR, ftsUpsert, ftsDelete, extractText, logActivity } from './db.js';
+import { spawnSync, execFile } from 'child_process';
+import db, { DATA_DIR, FILES_DIR, ftsUpsert, ftsDelete, extractText, logActivity } from './db.js';
 import { docToMarkdown } from './markdown.js';
 import { mountMcp } from './mcp.js';
 
@@ -49,6 +51,9 @@ function permanentDelete(pageId) {
   for (const f of fileRows) {
     try {
       fs.unlinkSync(path.join(FILES_DIR, f.id));
+    } catch {}
+    try {
+      fs.unlinkSync(path.join(DATA_DIR, 'previews', `${f.id}.pdf`));
     } catch {}
   }
   db.prepare('DELETE FROM pages WHERE id = ?').run(pageId); // cascada borra hijos, files y versions
@@ -504,6 +509,97 @@ app.post('/api/files', upload.single('file'), (req, res) => {
 
 const INLINE_MIME = /^(image|video|audio|text)\/|^application\/pdf$/;
 
+// ---------- Vista previa de documentos de oficina (LibreOffice → PDF) ----------
+
+const hasSoffice = spawnSync('soffice', ['--version'], { stdio: 'ignore' }).status === 0;
+console.log(
+  hasSoffice
+    ? 'LibreOffice detectado: vista previa de Word/Excel/PowerPoint activada'
+    : 'LibreOffice no encontrado: sin vista previa de documentos de oficina (apt install libreoffice-writer libreoffice-calc libreoffice-impress)'
+);
+const PREVIEWS_DIR = path.join(DATA_DIR, 'previews');
+fs.mkdirSync(PREVIEWS_DIR, { recursive: true });
+
+const OFFICE_EXT = new Set([
+  '.doc', '.docx', '.xls', '.xlsx', '.ppt', '.pptx', '.odt', '.ods', '.odp', '.rtf',
+]);
+const previewPath = (fileId) => path.join(PREVIEWS_DIR, `${fileId}.pdf`);
+const previewsInFlight = new Map();
+
+function convertToPdf(f) {
+  return new Promise((resolve, reject) => {
+    // Los archivos se guardan sin extensión: copia temporal con la extensión
+    // real para que LibreOffice detecte el formato, y perfil aislado para
+    // poder convertir en paralelo sin choques de perfil de usuario.
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'nonotion-prev-'));
+    const ext = path.extname(f.name).toLowerCase();
+    const src = path.join(tmp, `doc${ext}`);
+    const cleanup = () => fs.rmSync(tmp, { recursive: true, force: true });
+    try {
+      fs.copyFileSync(path.join(FILES_DIR, f.id), src);
+    } catch (e) {
+      cleanup();
+      return reject(new Error('Archivo no encontrado en disco'));
+    }
+    execFile(
+      'soffice',
+      [
+        '--headless', '--norestore',
+        `-env:UserInstallation=file://${tmp}/profile`,
+        '--convert-to', 'pdf', '--outdir', tmp, src,
+      ],
+      { timeout: 120000 },
+      (err) => {
+        const out = path.join(tmp, 'doc.pdf');
+        if (!err && fs.existsSync(out)) {
+          try {
+            fs.copyFileSync(out, previewPath(f.id));
+            cleanup();
+            return resolve();
+          } catch (e) {
+            err = e;
+          }
+        }
+        cleanup();
+        reject(new Error(err?.message || 'LibreOffice no generó el PDF'));
+      }
+    );
+  });
+}
+
+app.get('/files/:id/preview', async (req, res) => {
+  const f = db.prepare('SELECT * FROM files WHERE id = ?').get(req.params.id);
+  if (!f) return res.status(404).json({ error: 'No encontrado' });
+  if (!OFFICE_EXT.has(path.extname(f.name).toLowerCase())) {
+    return res.status(400).json({ error: 'Este tipo de archivo no necesita conversión' });
+  }
+  if (!hasSoffice) {
+    return res.status(501).json({
+      error:
+        'LibreOffice no está instalado en el servidor. Instálalo con: apt install libreoffice-writer libreoffice-calc libreoffice-impress',
+    });
+  }
+  if (!fs.existsSync(previewPath(f.id))) {
+    if (!previewsInFlight.has(f.id)) {
+      previewsInFlight.set(
+        f.id,
+        convertToPdf(f).finally(() => previewsInFlight.delete(f.id))
+      );
+    }
+    try {
+      await previewsInFlight.get(f.id);
+    } catch (e) {
+      return res.status(500).json({ error: `No se pudo convertir el documento: ${e.message}` });
+    }
+  }
+  res.sendFile(previewPath(f.id), {
+    headers: {
+      'Content-Type': 'application/pdf',
+      'Content-Disposition': `inline; filename*=UTF-8''${encodeURIComponent(f.name)}.pdf`,
+    },
+  });
+});
+
 app.get('/files/:id/:name?', (req, res) => {
   const f = db.prepare('SELECT * FROM files WHERE id = ?').get(req.params.id);
   if (!f) return res.status(404).send('No encontrado');
@@ -527,6 +623,9 @@ app.delete('/api/files/:id', (req, res) => {
   if (!f) return res.status(404).json({ error: 'No encontrado' });
   try {
     fs.unlinkSync(path.join(FILES_DIR, f.id));
+  } catch {}
+  try {
+    fs.unlinkSync(previewPath(f.id));
   } catch {}
   db.prepare('DELETE FROM files WHERE id = ?').run(f.id);
   res.json({ ok: true });

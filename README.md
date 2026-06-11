@@ -15,6 +15,7 @@ Webapp autoalojada tipo Notion, **sin límites de capacidad**: tus apuntes, resp
 - **Historial de versiones** — snapshots automáticos al editar (máx. uno cada 10 min, se conservan 50 por página) con vista previa y restauración, como el Page History de Notion.
 - **Papelera** — eliminar mueve a la papelera (con subpáginas y archivos); restaurable durante 30 días, después se purga automáticamente.
 - **Organiza arrastrando** — arrastra páginas en el árbol para reordenarlas o anidarlas; duplica páginas (subárbol y archivos incluidos) con un clic.
+- **Visor de documentos integrado** — clic en un adjunto y se abre dentro de NoNotion: PDF, imágenes, vídeo, audio y texto/código directamente, y **Word, Excel y PowerPoint** convertidos a PDF en el servidor con LibreOffice (con caché: la primera apertura tarda unos segundos, las siguientes son instantáneas). Nada sale de tu servidor — sin visores de Google/Microsoft.
 - **Export ZIP completo** — descarga todo el workspace como Markdown + archivos adjuntos con enlaces relativos: backup portable, cero lock-in.
 - **Calendario propio (sin integraciones externas)** — vista mensual y semanal que muestra qué páginas creaste y editaste cada día (registro de actividad interno): de un vistazo ves en qué trabajaste y qué días no. Los datos antiguos se reconstruyen automáticamente desde el historial de versiones.
 - **Reuniones** — asigna una fecha a cualquier página y queda fijada ese día en el calendario (también fechas futuras). El botón "+" de un día crea una página de reunión con plantilla (asistentes, agenda, notas, acciones), y el comando `/reunión` inserta la misma plantilla en cualquier página.
@@ -192,6 +193,7 @@ En `skills/nonotion/SKILL.md` hay una skill lista para tu Claude: cópiala a `~/
 | GET/PUT/DELETE | `/api/pages/:id` | Leer / actualizar / mover a papelera (recursivo) |
 | POST | `/api/files` | Subir archivo (multipart, `page_id`) |
 | GET | `/files/:id/:nombre` | Descargar / ver archivo |
+| GET | `/files/:id/preview` | Documento de oficina convertido a PDF (LibreOffice, con caché) |
 | GET | `/api/search?q=` | Búsqueda full-text |
 | POST/DELETE | `/api/pages/:id/share` | Activar / desactivar enlace público |
 | GET | `/api/share/:token` | Página compartida (pública) |

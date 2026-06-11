@@ -3,11 +3,13 @@ import { useParams } from 'react-router-dom';
 import { useEditor, EditorContent } from '@tiptap/react';
 import { api, humanSize, parseContent } from '../api.js';
 import { baseExtensions } from './Editor.jsx';
+import FileViewer, { previewKind } from './FileViewer.jsx';
 
 export default function SharePage() {
   const { token } = useParams();
   const [page, setPage] = useState(null);
   const [error, setError] = useState(null);
+  const [viewing, setViewing] = useState(null);
 
   useEffect(() => {
     api.sharedPage(token).then(setPage).catch((e) => setError(e.message));
@@ -43,7 +45,18 @@ export default function SharePage() {
             <ul className="file-list">
               {page.files.map((f) => (
                 <li key={f.id} className="file-item">
-                  <a href={`/files/${f.id}/${encodeURIComponent(f.name)}`} target="_blank" rel="noreferrer" className="file-name">
+                  <a
+                    href={`/files/${f.id}/${encodeURIComponent(f.name)}`}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="file-name"
+                    onClick={(e) => {
+                      if (previewKind(f)) {
+                        e.preventDefault();
+                        setViewing(f);
+                      }
+                    }}
+                  >
                     {f.name}
                   </a>
                   <span className="file-size">{humanSize(f.size)}</span>
@@ -52,6 +65,7 @@ export default function SharePage() {
             </ul>
           </section>
         )}
+        {viewing && <FileViewer file={viewing} onClose={() => setViewing(null)} />}
         <footer className="share-footer">Compartido con NoNotion · solo lectura</footer>
       </div>
     </div>
