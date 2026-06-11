@@ -30,6 +30,18 @@ export const api = {
   deleteTrashItem: (id) => req(`/api/trash/${id}`, { method: 'DELETE' }),
   emptyTrash: () => req('/api/trash', { method: 'DELETE' }),
   calendar: (from, to) => req(`/api/calendar?from=${from}&to=${to}`),
+  stats: () => req('/api/stats'),
+  startRecording: (pageId) =>
+    req('/api/recordings/start', { method: 'POST', body: JSON.stringify({ page_id: pageId }) }),
+  uploadChunk: (id, blob) =>
+    req(`/api/recordings/${id}/chunk`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/octet-stream' },
+      body: blob,
+    }),
+  finishRecording: (id, data) =>
+    req(`/api/recordings/${id}/finish`, { method: 'POST', body: JSON.stringify(data) }),
+  cancelRecording: (id) => req(`/api/recordings/${id}`, { method: 'DELETE' }),
   versions: (pageId) => req(`/api/pages/${pageId}/versions`),
   version: (vid) => req(`/api/versions/${vid}`),
   restoreVersion: (pageId, vid) => req(`/api/pages/${pageId}/restore-version/${vid}`, { method: 'POST' }),

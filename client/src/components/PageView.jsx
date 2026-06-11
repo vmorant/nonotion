@@ -5,6 +5,7 @@ import Editor from './Editor.jsx';
 import Attachments from './Attachments.jsx';
 import EmojiPicker from './EmojiPicker.jsx';
 import HistoryModal from './HistoryModal.jsx';
+import Recorder from './Recorder.jsx';
 
 function breadcrumb(pages, id) {
   const byId = new Map(pages.map((p) => [p.id, p]));
@@ -142,6 +143,29 @@ export default function PageView({ pages, onTreeChange, onDelete, onCreateChild,
               const v = e.target.value || null;
               setPage({ ...page, page_date: v });
               queueSave({ page_date: v });
+            }}
+          />
+          <Recorder
+            pageId={id}
+            pageTitle={page.title}
+            onSaved={(file, kind) => {
+              setFiles((prev) => [...prev, file]);
+              editorRef.current
+                ?.chain()
+                .focus('end')
+                .insertContent([
+                  {
+                    type: 'paragraph',
+                    content: [
+                      {
+                        type: 'text',
+                        text: file.name,
+                        marks: [{ type: 'link', attrs: { href: file.url } }],
+                      },
+                    ],
+                  },
+                ])
+                .run();
             }}
           />
           <button className="btn" onClick={() => setHistoryOpen(true)} title="Historial de versiones">

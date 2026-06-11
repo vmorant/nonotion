@@ -1267,6 +1267,145 @@ button.page-icon:hover {
   font-size: 0.8rem;
 }
 
+/* ---------- Grabador de reuniones ---------- */
+
+.recorder-modal {
+  width: min(480px, 92vw);
+  height: fit-content;
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  box-shadow: 0 16px 60px rgba(0, 0, 0, 0.6);
+  padding: 18px 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.recorder-modal h3 {
+  margin: 0;
+}
+
+.recorder-presets {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.preset-card {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  cursor: pointer;
+}
+
+.preset-card:hover {
+  background: var(--bg-hover);
+}
+
+.preset-card.selected {
+  border-color: var(--accent);
+  background: rgba(74, 158, 255, 0.08);
+}
+
+.preset-desc {
+  color: var(--text-dim);
+  font-size: 0.8rem;
+}
+
+.recorder-mic {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  font-size: 0.9rem;
+}
+
+.recorder-help {
+  margin: 0;
+  font-size: 0.8rem;
+  color: var(--text-dim);
+  background: var(--bg-sidebar);
+  border-left: 3px solid var(--accent);
+  padding: 8px 12px;
+  border-radius: 4px;
+}
+
+.recorder-error {
+  margin: 0;
+  font-size: 0.82rem;
+  color: var(--danger);
+}
+
+.recorder-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.rec-widget {
+  position: fixed;
+  bottom: 18px;
+  right: 18px;
+  z-index: 150;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  background: var(--bg-input);
+  border: 1px solid var(--danger);
+  border-radius: 10px;
+  padding: 9px 14px;
+  box-shadow: 0 8px 30px rgba(0, 0, 0, 0.5);
+  font-size: 0.85rem;
+}
+
+.rec-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--danger);
+  animation: rec-pulse 1.2s ease-in-out infinite;
+}
+
+@keyframes rec-pulse {
+  50% {
+    opacity: 0.25;
+  }
+}
+
+.rec-time {
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+}
+
+.rec-size {
+  color: var(--text-dim);
+  font-size: 0.78rem;
+}
+
+.rec-warn {
+  color: #e8b339;
+  font-size: 0.75rem;
+}
+
+.file-player {
+  width: 100%;
+  margin: 4px 0 10px;
+  border-radius: var(--radius);
+  outline: none;
+}
+
+audio.file-player {
+  height: 36px;
+}
+
+.sidebar-storage {
+  margin-bottom: 4px;
+}
+
 /* ---------- Página compartida ---------- */
 
 .share-page {

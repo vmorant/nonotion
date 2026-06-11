@@ -3,6 +3,7 @@ import { useParams } from 'react-router-dom';
 import { useEditor, EditorContent } from '@tiptap/react';
 import { api, humanSize, parseContent } from '../api.js';
 import { baseExtensions } from './Editor.jsx';
+import { InlinePlayer, isPlayable } from './Attachments.jsx';
 
 export default function SharePage() {
   const { token } = useParams();
@@ -42,11 +43,14 @@ export default function SharePage() {
             </div>
             <ul className="file-list">
               {page.files.map((f) => (
-                <li key={f.id} className="file-item">
-                  <a href={`/files/${f.id}/${encodeURIComponent(f.name)}`} target="_blank" rel="noreferrer" className="file-name">
-                    {f.name}
-                  </a>
-                  <span className="file-size">{humanSize(f.size)}</span>
+                <li key={f.id}>
+                  <div className="file-item">
+                    <a href={`/files/${f.id}/${encodeURIComponent(f.name)}`} target="_blank" rel="noreferrer" className="file-name">
+                      {f.name}
+                    </a>
+                    <span className="file-size">{humanSize(f.size)}</span>
+                  </div>
+                  {isPlayable(f.mime) && <InlinePlayer file={f} />}
                 </li>
               ))}
             </ul>

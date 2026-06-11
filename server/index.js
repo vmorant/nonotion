@@ -4,7 +4,8 @@ import fs from 'fs';
 import multer from 'multer';
 import { nanoid } from 'nanoid';
 import { fileURLToPath } from 'url';
-import db, { FILES_DIR, ftsUpsert, ftsDelete, extractText, logActivity } from './db.js';
+import { spawnSync } from 'child_process';
+import db, { DATA_DIR, FILES_DIR, ftsUpsert, ftsDelete, extractText, logActivity } from './db.js';
 import { docToMarkdown } from './markdown.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -437,7 +438,122 @@ app.post('/api/capture', (req, res) => {
   res.json({ id, title: pageTitle, url: `/p/${id}` });
 });
 
+// ---------- Grabaciones de reuniones (subida por chunks) ----------
+
+const hasFfmpeg = spawnSync('ffmpeg', ['-version'], { stdio: 'ignore' }).status === 0;
+console.log(hasFfmpeg ? 'ffmpeg detectado: remux de grabaciones activado' : 'ffmpeg no encontrado: las grabaciones se guardan sin remux (seek limitado)');
+
+const partPath = (id) => path.join(FILES_DIR, `${id}.part`);
+
+function cleanStaleParts() {
+  const cutoff = Date.now() - 24 * 60 * 60 * 1000;
+  for (const f of fs.readdirSync(FILES_DIR)) {
+    if (!f.endsWith('.part')) continue;
+    const p = path.join(FILES_DIR, f);
+    try {
+      if (fs.statSync(p).mtimeMs < cutoff) fs.unlinkSync(p);
+    } catch {}
+  }
+}
+
+app.post('/api/recordings/start', (req, res) => {
+  cleanStaleParts();
+  const { page_id } = req.body || {};
+  if (!page_id || !db.prepare('SELECT id FROM pages WHERE id = ?').get(page_id)) {
+    return res.status(400).json({ error: 'page_id inválido' });
+  }
+  const id = nanoid(21);
+  fs.writeFileSync(partPath(id), '');
+  res.json({ id });
+});
+
+app.post(
+  '/api/recordings/:id/chunk',
+  express.raw({ type: 'application/octet-stream', limit: '32mb' }),
+  (req, res) => {
+    const p = partPath(req.params.id);
+    if (!/^[A-Za-z0-9_-]{21}$/.test(req.params.id) || !fs.existsSync(p)) {
+      return res.status(404).json({ error: 'Grabación no iniciada' });
+    }
+    if (req.body?.length) fs.appendFileSync(p, req.body);
+    res.json({ bytes: fs.statSync(p).size });
+  }
+);
+
+app.post('/api/recordings/:id/finish', (req, res) => {
+  const id = req.params.id;
+  const p = partPath(id);
+  if (!/^[A-Za-z0-9_-]{21}$/.test(id) || !fs.existsSync(p)) {
+    return res.status(404).json({ error: 'Grabación no iniciada' });
+  }
+  const { page_id, name, kind = 'video' } = req.body || {};
+  if (!page_id || !db.prepare('SELECT id FROM pages WHERE id = ?').get(page_id)) {
+    return res.status(400).json({ error: 'page_id inválido' });
+  }
+  const finalPath = path.join(FILES_DIR, id);
+  let remuxed = false;
+  if (hasFfmpeg) {
+    // Remux sin recodificar: escribe duración y cues para que el seek funcione
+    const out = spawnSync('ffmpeg', ['-y', '-i', p, '-c', 'copy', '-f', 'webm', finalPath], {
+      stdio: 'ignore',
+      timeout: 120000,
+    });
+    remuxed = out.status === 0 && fs.existsSync(finalPath) && fs.statSync(finalPath).size > 0;
+    if (remuxed) fs.unlinkSync(p);
+  }
+  if (!remuxed) {
+    try { fs.unlinkSync(finalPath); } catch {}
+    fs.renameSync(p, finalPath);
+  }
+  const mime = kind === 'audio' ? 'audio/webm' : 'video/webm';
+  const fileName = (name || `Grabación ${new Date().toISOString().slice(0, 16).replace('T', ' ')}`) + '.webm';
+  const size = fs.statSync(finalPath).size;
+  db.prepare('INSERT INTO files (id, page_id, name, mime, size) VALUES (?, ?, ?, ?, ?)').run(
+    id,
+    page_id,
+    fileName,
+    mime,
+    size
+  );
+  res.json({ id, name: fileName, mime, size, remuxed, url: `/files/${id}/${encodeURIComponent(fileName)}` });
+});
+
+app.delete('/api/recordings/:id', (req, res) => {
+  if (/^[A-Za-z0-9_-]{21}$/.test(req.params.id)) {
+    try { fs.unlinkSync(partPath(req.params.id)); } catch {}
+  }
+  res.json({ ok: true });
+});
+
+// ---------- Almacenamiento ----------
+
+app.get('/api/stats', (req, res) => {
+  const filesBytes = db.prepare('SELECT COALESCE(SUM(size), 0) AS s FROM files').get().s;
+  let dbBytes = 0;
+  try {
+    dbBytes = fs.statSync(path.join(DATA_DIR, 'nonotion.db')).size;
+  } catch {}
+  let diskFree = null;
+  let diskTotal = null;
+  try {
+    const st = fs.statfsSync(DATA_DIR);
+    diskFree = st.bavail * st.bsize;
+    diskTotal = st.blocks * st.bsize;
+  } catch {}
+  res.json({ files_bytes: filesBytes, db_bytes: dbBytes, disk_free_bytes: diskFree, disk_total_bytes: diskTotal });
+});
+
 // ---------- Archivos ----------
+
+// Red de seguridad para clientes que suben sin Content-Type útil
+const EXT_MIME = {
+  '.webm': 'video/webm', '.mp4': 'video/mp4', '.mkv': 'video/x-matroska',
+  '.mp3': 'audio/mpeg', '.ogg': 'audio/ogg', '.opus': 'audio/opus',
+  '.wav': 'audio/wav', '.m4a': 'audio/mp4', '.pdf': 'application/pdf',
+  '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg',
+  '.gif': 'image/gif', '.webp': 'image/webp', '.svg': 'image/svg+xml',
+  '.txt': 'text/plain', '.md': 'text/markdown',
+};
 
 app.post('/api/files', upload.single('file'), (req, res) => {
   if (!req.file) return res.status(400).json({ error: 'Falta el archivo' });
@@ -445,17 +561,21 @@ app.post('/api/files', upload.single('file'), (req, res) => {
   const f = req.file;
   // multer no decodifica UTF-8 en originalname (llega como latin1)
   const name = Buffer.from(f.originalname, 'latin1').toString('utf8');
+  let mime = f.mimetype;
+  if (!mime || mime === 'application/octet-stream') {
+    mime = EXT_MIME[path.extname(name).toLowerCase()] || mime;
+  }
   db.prepare('INSERT INTO files (id, page_id, name, mime, size) VALUES (?, ?, ?, ?, ?)').run(
     f.filename,
     pageId,
     name,
-    f.mimetype,
+    mime,
     f.size
   );
   res.json({
     id: f.filename,
     name,
-    mime: f.mimetype,
+    mime,
     size: f.size,
     url: `/files/${f.filename}/${encodeURIComponent(name)}`,
   });

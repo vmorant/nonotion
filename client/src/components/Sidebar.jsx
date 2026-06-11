@@ -1,5 +1,6 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { NavLink, useNavigate } from 'react-router-dom';
+import { api, humanSize } from '../api.js';
 
 function TreeItem({ page, index, childrenMap, depth, onCreate, onDelete, onDuplicate, onMove }) {
   const [open, setOpen] = useState(depth < 1);
@@ -142,6 +143,12 @@ function TreeItem({ page, index, childrenMap, depth, onCreate, onDelete, onDupli
 }
 
 export default function Sidebar({ pages, me, onCreate, onDelete, onDuplicate, onMove, onSearch, onCollapse, onOpenTrash }) {
+  const [stats, setStats] = useState(null);
+
+  useEffect(() => {
+    api.stats().then(setStats).catch(() => {});
+  }, []);
+
   const childrenMap = new Map();
   for (const p of pages) {
     const key = p.parent_id || null;
@@ -205,6 +212,12 @@ export default function Sidebar({ pages, me, onCreate, onDelete, onDuplicate, on
         </button>
       </div>
       <div className="sidebar-footer">
+        {stats && (
+          <div className="sidebar-storage" title="Archivos + base de datos · espacio libre en el disco del servidor">
+            📦 {humanSize(stats.files_bytes + stats.db_bytes)} usados
+            {stats.disk_free_bytes != null && <> · {humanSize(stats.disk_free_bytes)} libres</>}
+          </div>
+        )}
         {me?.email ? <span title="Sesión de Cloudflare Access">👤 {me.email}</span> : <span>Acceso local</span>}
       </div>
     </aside>
