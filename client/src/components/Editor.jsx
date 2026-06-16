@@ -37,7 +37,7 @@ export const baseExtensions = [
   }),
 ];
 
-export default function Editor({ initialContent, onChange, onFileUploaded, pageId, onReady }) {
+export default function Editor({ initialContent, onChange, onFileUploaded, pageId, onReady, onFocusChange }) {
   const fileInputRef = useRef(null);
 
   const uploadAndInsert = async (editor, files) => {
@@ -102,6 +102,8 @@ export default function Editor({ initialContent, onChange, onFileUploaded, pageI
     onUpdate: ({ editor }) => {
       onChange?.({ json: editor.getJSON(), text: editor.getText() });
     },
+    onFocus: () => onFocusChange?.(true),
+    onBlur: () => onFocusChange?.(false),
   });
 
   const editorRef = useRef(null);

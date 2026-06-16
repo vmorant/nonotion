@@ -1,8 +1,15 @@
+// Identificador único de esta pestaña: el servidor lo usa para no devolvernos
+// por SSE los cambios que hemos hecho nosotros mismos (evita auto-recargas).
+export const CLIENT_ID =
+  (typeof crypto !== 'undefined' && crypto.randomUUID && crypto.randomUUID()) ||
+  Math.random().toString(36).slice(2);
+
 async function req(url, options = {}) {
-  const res = await fetch(url, {
-    headers: options.body instanceof FormData ? {} : { 'Content-Type': 'application/json' },
-    ...options,
-  });
+  const headers = { 'X-Client-Id': CLIENT_ID, ...(options.headers || {}) };
+  if (!(options.body instanceof FormData) && !headers['Content-Type']) {
+    headers['Content-Type'] = 'application/json';
+  }
+  const res = await fetch(url, { ...options, headers });
   if (!res.ok) {
     const err = await res.json().catch(() => ({}));
     throw new Error(err.error || `Error ${res.status}`);
@@ -39,6 +46,36 @@ export const api = {
     fd.append('file', file);
     return req('/api/files', { method: 'POST', body: fd });
   },
+  // Subida con progreso (XHR expone upload.onprogress; fetch no)
+  uploadFileProgress: (file, pageId, onProgress) =>
+    new Promise((resolve, reject) => {
+      const xhr = new XMLHttpRequest();
+      xhr.open('POST', '/api/files');
+      xhr.setRequestHeader('X-Client-Id', CLIENT_ID);
+      xhr.upload.onprogress = (e) => {
+        if (e.lengthComputable && onProgress) onProgress(e.loaded / e.total);
+      };
+      xhr.onload = () => {
+        if (xhr.status >= 200 && xhr.status < 300) {
+          try {
+            resolve(JSON.parse(xhr.responseText));
+          } catch {
+            reject(new Error('Respuesta inválida del servidor'));
+          }
+        } else {
+          let msg = `Error ${xhr.status}`;
+          try {
+            msg = JSON.parse(xhr.responseText).error || msg;
+          } catch {}
+          reject(new Error(msg));
+        }
+      };
+      xhr.onerror = () => reject(new Error('Error de red al subir el archivo'));
+      const fd = new FormData();
+      fd.append('page_id', pageId || '');
+      fd.append('file', file);
+      xhr.send(fd);
+    }),
 };
 
 // El content de una página puede ser JSON Tiptap o Markdown crudo (páginas capturadas vía API)

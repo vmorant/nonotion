@@ -1267,6 +1267,86 @@ button.page-icon:hover {
   font-size: 0.8rem;
 }
 
+/* ---------- Aviso de cambio remoto (sincronización en vivo) ---------- */
+
+.remote-banner {
+  position: sticky;
+  top: 0;
+  z-index: 15;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 16px;
+  background: #2d2a1a;
+  border-bottom: 1px solid #5a4d1f;
+  color: #e8c44a;
+  font-size: 0.85rem;
+}
+
+.remote-banner span {
+  flex: 1;
+}
+
+/* ---------- Barras de progreso de subida ---------- */
+
+.upload-list {
+  list-style: none;
+  margin: 10px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.upload-item {
+  background: var(--bg-sidebar);
+  border-radius: var(--radius);
+  padding: 7px 10px;
+}
+
+.upload-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  font-size: 0.82rem;
+  margin-bottom: 5px;
+}
+
+.upload-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.upload-pct {
+  color: var(--text-dim);
+  font-variant-numeric: tabular-nums;
+  flex-shrink: 0;
+}
+
+.upload-bar {
+  height: 5px;
+  background: var(--bg-active);
+  border-radius: 3px;
+  overflow: hidden;
+}
+
+.upload-bar-fill {
+  height: 100%;
+  background: var(--accent);
+  border-radius: 3px;
+  transition: width 0.15s ease;
+}
+
+.upload-item.error .upload-pct {
+  color: var(--danger);
+}
+
+.upload-error {
+  font-size: 0.78rem;
+  color: var(--danger);
+}
+
 /* ---------- Visor de archivos ---------- */
 
 .viewer-modal {

@@ -27,6 +27,25 @@ const upload = multer({
   }),
 });
 
+// ---------- Sincronización en vivo (Server-Sent Events) ----------
+// Cada navegador abre /api/events; cuando algo cambia, le avisamos para que se
+// actualice sin recargar. El cambio lo puede provocar otra persona o el MCP.
+
+const sseClients = new Set(); // { res, client }
+
+function broadcast(event, originId) {
+  const data = `data: ${JSON.stringify(event)}\n\n`;
+  for (const c of sseClients) {
+    if (originId && c.client === originId) continue; // no devolver al autor su propio cambio
+    try {
+      c.res.write(data);
+    } catch {}
+  }
+}
+
+const notifyTree = (req) => broadcast({ type: 'tree' }, req?.headers?.['x-client-id']);
+const notifyPage = (req, id) => broadcast({ type: 'page', id }, req?.headers?.['x-client-id']);
+
 function subtreeIds(rootId) {
   return db
     .prepare(
@@ -58,6 +77,30 @@ function permanentDelete(pageId) {
   for (const id of subtree) ftsDelete(id);
   return subtree.length;
 }
+
+// ---------- Sincronización en vivo ----------
+
+app.get('/api/events', (req, res) => {
+  res.set({
+    'Content-Type': 'text/event-stream',
+    'Cache-Control': 'no-cache, no-transform',
+    Connection: 'keep-alive',
+    'X-Accel-Buffering': 'no',
+  });
+  res.flushHeaders?.();
+  res.write('retry: 3000\n\n');
+  const entry = { res, client: req.query.client || null };
+  sseClients.add(entry);
+  const keepalive = setInterval(() => {
+    try {
+      res.write(': ping\n\n');
+    } catch {}
+  }, 25000);
+  req.on('close', () => {
+    clearInterval(keepalive);
+    sseClients.delete(entry);
+  });
+});
 
 // ---------- Identidad (Cloudflare Access) ----------
 
@@ -92,6 +135,7 @@ app.post('/api/pages', (req, res) => {
     'INSERT INTO pages (id, parent_id, title, icon, content, content_text, position, page_date) VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
   ).run(id, parent_id, title, icon, raw, raw, pos, validDate(page_date));
   ftsUpsert(id, title, raw);
+  notifyTree(req);
   res.json(db.prepare('SELECT * FROM pages WHERE id = ?').get(id));
 });
 
@@ -167,6 +211,10 @@ app.put('/api/pages/:id', (req, res) => {
   if (fields.content !== undefined || fields.title !== undefined) {
     logActivity(page.id);
   }
+  notifyPage(req, page.id);
+  if (fields.title !== undefined || fields.icon !== undefined || fields.parent_id !== undefined || fields.page_date !== undefined) {
+    notifyTree(req);
+  }
   res.json(updated);
 });
 
@@ -200,6 +248,7 @@ app.post('/api/pages/:id/move', (req, res) => {
       page.id
     );
   })();
+  notifyTree(req);
   res.json({ ok: true });
 });
 
@@ -252,6 +301,7 @@ app.post('/api/pages/:id/duplicate', (req, res) => {
   const newId = db.transaction(() =>
     clone(orig.id, orig.parent_id, `Copia de ${orig.title || 'Sin título'}`, orig.position + 1)
   )();
+  notifyTree(req);
   res.json(db.prepare('SELECT * FROM pages WHERE id = ?').get(newId));
 });
 
@@ -266,6 +316,8 @@ app.delete('/api/pages/:id', (req, res) => {
     `UPDATE pages SET trashed_at = datetime('now') WHERE id IN (${placeholders}) AND trashed_at IS NULL`
   ).run(...subtree);
   for (const id of subtree) ftsDelete(id);
+  notifyTree(req);
+  notifyPage(req, page.id);
   res.json({ ok: true, trashed: subtree.length });
 });
 
@@ -301,6 +353,7 @@ app.post('/api/trash/:id/restore', (req, res) => {
   })();
   const rows = db.prepare(`SELECT id, title, content_text FROM pages WHERE id IN (${placeholders})`).all(...subtree);
   for (const r of rows) ftsUpsert(r.id, r.title, r.content_text);
+  notifyTree(req);
   res.json({ ok: true, restored: subtree.length });
 });
 
@@ -308,6 +361,7 @@ app.delete('/api/trash/:id', (req, res) => {
   const page = db.prepare('SELECT id FROM pages WHERE id = ? AND trashed_at IS NOT NULL').get(req.params.id);
   if (!page) return res.status(404).json({ error: 'No está en la papelera' });
   const deleted = permanentDelete(page.id);
+  notifyTree(req);
   res.json({ ok: true, deleted });
 });
 
@@ -321,6 +375,7 @@ app.delete('/api/trash', (req, res) => {
     .all();
   let deleted = 0;
   for (const r of roots) deleted += permanentDelete(r.id);
+  notifyTree(req);
   res.json({ ok: true, deleted });
 });
 
@@ -365,6 +420,8 @@ app.post('/api/pages/:id/restore-version/:vid', (req, res) => {
   ).run(v.title, v.content, text, page.id);
   ftsUpsert(page.id, v.title, text);
   logActivity(page.id);
+  notifyPage(req, page.id);
+  notifyTree(req);
   res.json(db.prepare('SELECT * FROM pages WHERE id = ?').get(page.id));
 });
 
@@ -438,6 +495,7 @@ app.post('/api/capture', (req, res) => {
     'INSERT INTO pages (id, parent_id, title, icon, content, content_text, position, page_date) VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
   ).run(id, parentId, pageTitle, typeof icon === 'string' && icon ? icon : '🤖', markdown, markdown, pos, validDate(page_date));
   ftsUpsert(id, pageTitle, markdown);
+  notifyTree(req);
   res.json({ id, title: pageTitle, url: `/p/${id}` });
 });
 
@@ -478,6 +536,7 @@ app.post('/api/pages/:id/append', async (req, res) => {
   ).run(combined, combined, page.id);
   ftsUpsert(page.id, page.title, combined);
   logActivity(page.id);
+  notifyPage(req, page.id);
   res.json(db.prepare('SELECT * FROM pages WHERE id = ?').get(page.id));
 });
 
@@ -496,6 +555,7 @@ app.post('/api/files', upload.single('file'), (req, res) => {
     f.mimetype,
     f.size
   );
+  if (pageId) notifyPage(req, pageId);
   res.json({
     id: f.filename,
     name,
@@ -726,6 +786,7 @@ app.delete('/api/files/:id', (req, res) => {
   } catch {}
   clearPreviews(f.id);
   db.prepare('DELETE FROM files WHERE id = ?').run(f.id);
+  if (f.page_id) notifyPage(req, f.page_id);
   res.json({ ok: true });
 });
 
@@ -763,11 +824,13 @@ app.post('/api/pages/:id/share', (req, res) => {
   if (!page) return res.status(404).json({ error: 'Página no encontrada' });
   const token = page.share_token || nanoid(24);
   db.prepare('UPDATE pages SET share_token = ? WHERE id = ?').run(token, page.id);
+  notifyTree(req);
   res.json({ token });
 });
 
 app.delete('/api/pages/:id/share', (req, res) => {
   db.prepare('UPDATE pages SET share_token = NULL WHERE id = ?').run(req.params.id);
+  notifyTree(req);
   res.json({ ok: true });
 });
 

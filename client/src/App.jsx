@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import { Routes, Route, useNavigate, useLocation } from 'react-router-dom';
-import { api } from './api.js';
+import { api, CLIENT_ID } from './api.js';
 import Sidebar from './components/Sidebar.jsx';
 import PageView from './components/PageView.jsx';
 import SearchModal from './components/SearchModal.jsx';
@@ -13,6 +13,7 @@ export default function App() {
   const [searchOpen, setSearchOpen] = useState(false);
   const [trashOpen, setTrashOpen] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(true);
+  const [pageEvent, setPageEvent] = useState(null); // { id, n } cuando una página cambia en remoto
   const navigate = useNavigate();
   const location = useLocation();
 
@@ -23,6 +24,31 @@ export default function App() {
   useEffect(() => {
     refreshTree();
     api.me().then(setMe).catch(() => {});
+  }, [refreshTree]);
+
+  // Sincronización en vivo: el servidor avisa cuando cambia algo (otra persona o el MCP)
+  useEffect(() => {
+    const es = new EventSource(`/api/events?client=${encodeURIComponent(CLIENT_ID)}`);
+    let treeTimer;
+    let counter = 0;
+    es.onmessage = (e) => {
+      let msg;
+      try {
+        msg = JSON.parse(e.data);
+      } catch {
+        return;
+      }
+      if (msg.type === 'tree') {
+        clearTimeout(treeTimer);
+        treeTimer = setTimeout(() => refreshTree(), 800); // agrupa ráfagas (p. ej. al teclear un título)
+      } else if (msg.type === 'page') {
+        setPageEvent({ id: msg.id, n: ++counter });
+      }
+    };
+    return () => {
+      clearTimeout(treeTimer);
+      es.close();
+    };
   }, [refreshTree]);
 
   useEffect(() => {
@@ -90,6 +116,7 @@ export default function App() {
             element={
               <PageView
                 pages={pages}
+                pageEvent={pageEvent}
                 onTreeChange={refreshTree}
                 onDelete={deletePage}
                 onCreateChild={createPage}

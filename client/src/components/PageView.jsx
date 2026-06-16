@@ -17,7 +17,7 @@ function breadcrumb(pages, id) {
   return chain;
 }
 
-export default function PageView({ pages, onTreeChange, onDelete, onCreateChild, onDuplicate }) {
+export default function PageView({ pages, pageEvent, onTreeChange, onDelete, onCreateChild, onDuplicate }) {
   const { id } = useParams();
   const [page, setPage] = useState(null);
   const [files, setFiles] = useState([]);
@@ -28,8 +28,11 @@ export default function PageView({ pages, onTreeChange, onDelete, onCreateChild,
   const [shareToken, setShareToken] = useState(null);
   const [copied, setCopied] = useState(false);
   const [reloadKey, setReloadKey] = useState(0);
+  const [remoteChange, setRemoteChange] = useState(false); // aviso de cambio remoto mientras editas
   const editorRef = useRef(null);
+  const focusedRef = useRef(false);
   const saveTimer = useRef(null);
+  const liveTimer = useRef(null);
   const pending = useRef({});
 
   const loadPage = useCallback(() => {
@@ -40,14 +43,43 @@ export default function PageView({ pages, onTreeChange, onDelete, onCreateChild,
     });
   }, [id]);
 
+  // Recarga el contenido desde el servidor y remonta el editor
+  const reloadContent = useCallback(async () => {
+    clearTimeout(saveTimer.current);
+    pending.current = {};
+    await loadPage();
+    setReloadKey((k) => k + 1);
+    setRemoteChange(false);
+    setStatus('saved');
+  }, [loadPage]);
+
   useEffect(() => {
     setPage(null);
     setShareOpen(false);
     setEmojiOpen(false);
     setHistoryOpen(false);
+    setRemoteChange(false);
     loadPage();
-    return () => clearTimeout(saveTimer.current);
+    return () => {
+      clearTimeout(saveTimer.current);
+      clearTimeout(liveTimer.current);
+    };
   }, [loadPage]);
+
+  // Sincronización en vivo: alguien (o el MCP) cambió esta página
+  useEffect(() => {
+    if (!pageEvent || pageEvent.id !== id) return;
+    const busy = () => focusedRef.current || status === 'saving' || Object.keys(pending.current).length > 0;
+    if (busy()) {
+      setRemoteChange(true); // estás escribiendo: no te pisamos, te avisamos
+    } else {
+      clearTimeout(liveTimer.current);
+      liveTimer.current = setTimeout(() => {
+        if (!busy()) reloadContent();
+      }, 600);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pageEvent]);
 
   const flush = useCallback(async () => {
     const data = pending.current;
@@ -108,15 +140,23 @@ export default function PageView({ pages, onTreeChange, onDelete, onCreateChild,
 
   const onVersionRestored = async () => {
     setHistoryOpen(false);
-    clearTimeout(saveTimer.current);
-    pending.current = {};
-    await loadPage();
-    setReloadKey((k) => k + 1);
+    await reloadContent();
     onTreeChange();
   };
 
   return (
     <div className="page">
+      {remoteChange && (
+        <div className="remote-banner">
+          <span>🔄 Esta página ha cambiado en otro sitio mientras editabas.</span>
+          <button className="btn" onClick={reloadContent}>
+            Recargar
+          </button>
+          <button className="btn" onClick={() => setRemoteChange(false)}>
+            Seguir editando
+          </button>
+        </div>
+      )}
       <div className="page-topbar">
         <nav className="breadcrumbs">
           {crumbs.map((c, i) => (
@@ -221,6 +261,7 @@ export default function PageView({ pages, onTreeChange, onDelete, onCreateChild,
           initialContent={parseContent(page.content)}
           onReady={(ed) => (editorRef.current = ed)}
           onChange={({ json, text }) => queueSave({ content: json, content_text: text })}
+          onFocusChange={(f) => (focusedRef.current = f)}
           onFileUploaded={(f) => setFiles((prev) => [...prev, f])}
         />
 

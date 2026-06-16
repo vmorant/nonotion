@@ -15,21 +15,27 @@ function fileIcon(mime = '') {
 export default function Attachments({ pageId, files, onChange }) {
   const inputRef = useRef(null);
   const [dragOver, setDragOver] = useState(false);
-  const [uploading, setUploading] = useState(false);
+  const [uploads, setUploads] = useState([]); // [{ key, name, pct, error }]
   const [viewing, setViewing] = useState(null);
+  const uploading = uploads.length > 0;
 
   const uploadFiles = async (list) => {
-    setUploading(true);
-    const added = [];
-    for (const file of list) {
+    const items = Array.from(list).map((file) => ({
+      key: `${file.name}-${file.size}-${Math.random().toString(36).slice(2)}`,
+      file,
+    }));
+    setUploads((u) => [...u, ...items.map(({ key, file }) => ({ key, name: file.name, pct: 0 }))]);
+    for (const { key, file } of items) {
       try {
-        added.push(await api.uploadFile(file, pageId));
+        const meta = await api.uploadFileProgress(file, pageId, (frac) =>
+          setUploads((u) => u.map((it) => (it.key === key ? { ...it, pct: Math.round(frac * 100) } : it)))
+        );
+        onChange((prev) => [...prev, meta]); // setFiles funcional: evita carreras al subir varios
+        setUploads((u) => u.filter((it) => it.key !== key));
       } catch (err) {
-        console.error(err);
+        setUploads((u) => u.map((it) => (it.key === key ? { ...it, error: err.message } : it)));
       }
     }
-    onChange([...files, ...added]);
-    setUploading(false);
   };
 
   const remove = async (id) => {
@@ -57,7 +63,28 @@ export default function Attachments({ pageId, files, onChange }) {
           {uploading ? 'Subiendo…' : '+ Subir archivo'}
         </button>
       </div>
-      {files.length === 0 && <div className="attachments-empty">Arrastra archivos aquí o usa el botón. Sin límite de tamaño.</div>}
+      {files.length === 0 && uploads.length === 0 && (
+        <div className="attachments-empty">Arrastra archivos aquí o usa el botón. Sin límite de tamaño.</div>
+      )}
+      {uploads.length > 0 && (
+        <ul className="upload-list">
+          {uploads.map((u) => (
+            <li key={u.key} className={'upload-item' + (u.error ? ' error' : '')}>
+              <div className="upload-row">
+                <span className="upload-name">{u.name}</span>
+                <span className="upload-pct">{u.error ? '⚠' : `${u.pct}%`}</span>
+              </div>
+              {u.error ? (
+                <div className="upload-error">{u.error}</div>
+              ) : (
+                <div className="upload-bar">
+                  <div className="upload-bar-fill" style={{ width: `${u.pct}%` }} />
+                </div>
+              )}
+            </li>
+          ))}
+        </ul>
+      )}
       <ul className="file-list">
         {files.map((f) => (
           <li key={f.id} className="file-item">
