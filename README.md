@@ -177,7 +177,8 @@ Los clientes MCP no pueden pasar el login de Zero Trust, así que crea una aplic
 | `edit_page` | Sustituir un fragmento exacto del Markdown |
 | `update_page` | Reescribir contenido/título/icono/fecha (queda versión anterior en el historial) |
 | `trash_page` | Mover a la papelera (reversible; no existe borrado definitivo vía MCP) |
-| `read_attachment` | Leer adjuntos: texto/código y también imágenes |
+| `read_attachment` | Leer el contenido de un adjunto: extrae texto de PDF/Word/Excel/PowerPoint, muestra imágenes y archivos de texto/código |
+| `read_document_pages` | Renderiza páginas concretas de un PDF/documento como imágenes (escaneados, diagramas, tablas con formato) |
 | `attach_file` | Subir un archivo (código generado, configs…) a una página |
 
 ### Skill recomendada

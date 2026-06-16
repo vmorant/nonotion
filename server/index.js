@@ -52,9 +52,7 @@ function permanentDelete(pageId) {
     try {
       fs.unlinkSync(path.join(FILES_DIR, f.id));
     } catch {}
-    try {
-      fs.unlinkSync(path.join(DATA_DIR, 'previews', `${f.id}.pdf`));
-    } catch {}
+    clearPreviews(f.id);
   }
   db.prepare('DELETE FROM pages WHERE id = ?').run(pageId); // cascada borra hijos, files y versions
   for (const id of subtree) ftsDelete(id);
@@ -517,6 +515,12 @@ console.log(
     ? 'LibreOffice detectado: vista previa de Word/Excel/PowerPoint activada'
     : 'LibreOffice no encontrado: sin vista previa de documentos de oficina (apt install libreoffice-writer libreoffice-calc libreoffice-impress)'
 );
+const hasPoppler = spawnSync('pdftotext', ['-v'], { stdio: 'ignore' }).status === 0;
+console.log(
+  hasPoppler
+    ? 'poppler detectado: extracción de texto y páginas de PDF activada'
+    : 'poppler no encontrado: sin lectura de contenido de PDF/Office (apt install poppler-utils)'
+);
 const PREVIEWS_DIR = path.join(DATA_DIR, 'previews');
 fs.mkdirSync(PREVIEWS_DIR, { recursive: true });
 
@@ -525,6 +529,63 @@ const OFFICE_EXT = new Set([
 ]);
 const previewPath = (fileId) => path.join(PREVIEWS_DIR, `${fileId}.pdf`);
 const previewsInFlight = new Map();
+const TEXT_EXTRACT_LIMIT = 600 * 1024; // ~150K tokens de texto extraído
+const MAX_RENDER_PAGES = 10;
+
+// Borra todos los artefactos de preview de un archivo (PDF convertido + páginas)
+function clearPreviews(fileId) {
+  try {
+    for (const name of fs.readdirSync(PREVIEWS_DIR)) {
+      if (name.startsWith(`${fileId}.`)) {
+        try {
+          fs.unlinkSync(path.join(PREVIEWS_DIR, name));
+        } catch {}
+      }
+    }
+  } catch {}
+}
+
+// Devuelve la ruta a un PDF para este archivo: el original si ya es PDF, o la
+// conversión cacheada de LibreOffice si es un documento de oficina. null si no aplica.
+async function ensurePdf(f) {
+  const ext = path.extname(f.name).toLowerCase();
+  if (ext === '.pdf' || f.mime === 'application/pdf') return path.join(FILES_DIR, f.id);
+  if (!OFFICE_EXT.has(ext)) return null;
+  if (!hasSoffice) throw new Error('LibreOffice no está instalado (apt install libreoffice-writer libreoffice-calc libreoffice-impress)');
+  if (!fs.existsSync(previewPath(f.id))) {
+    if (!previewsInFlight.has(f.id)) {
+      previewsInFlight.set(f.id, convertToPdf(f).finally(() => previewsInFlight.delete(f.id)));
+    }
+    await previewsInFlight.get(f.id);
+  }
+  return previewPath(f.id);
+}
+
+function pdfToText(pdfPath) {
+  return new Promise((resolve, reject) => {
+    execFile(
+      'pdftotext',
+      ['-layout', '-enc', 'UTF-8', pdfPath, '-'],
+      { maxBuffer: 64 * 1024 * 1024, timeout: 120000 },
+      (err, stdout) => (err ? reject(err) : resolve(stdout))
+    );
+  });
+}
+
+// Renderiza una página (1-based) a PNG cacheado y devuelve su ruta
+function renderPdfPage(pdfPath, page, fileId) {
+  const out = path.join(PREVIEWS_DIR, `${fileId}.p${page}.png`);
+  if (fs.existsSync(out)) return Promise.resolve(out);
+  const prefix = out.replace(/\.png$/, '');
+  return new Promise((resolve, reject) => {
+    execFile(
+      'pdftoppm',
+      ['-png', '-singlefile', '-f', String(page), '-l', String(page), '-scale-to', '1600', pdfPath, prefix],
+      { timeout: 120000 },
+      (err) => (err || !fs.existsSync(out) ? reject(new Error(err?.message || 'No se pudo renderizar la página')) : resolve(out))
+    );
+  });
+}
 
 function convertToPdf(f) {
   return new Promise((resolve, reject) => {
@@ -579,18 +640,10 @@ app.get('/files/:id/preview', async (req, res) => {
         'LibreOffice no está instalado en el servidor. Instálalo con: apt install libreoffice-writer libreoffice-calc libreoffice-impress',
     });
   }
-  if (!fs.existsSync(previewPath(f.id))) {
-    if (!previewsInFlight.has(f.id)) {
-      previewsInFlight.set(
-        f.id,
-        convertToPdf(f).finally(() => previewsInFlight.delete(f.id))
-      );
-    }
-    try {
-      await previewsInFlight.get(f.id);
-    } catch (e) {
-      return res.status(500).json({ error: `No se pudo convertir el documento: ${e.message}` });
-    }
+  try {
+    await ensurePdf(f);
+  } catch (e) {
+    return res.status(500).json({ error: `No se pudo convertir el documento: ${e.message}` });
   }
   res.sendFile(previewPath(f.id), {
     headers: {
@@ -598,6 +651,53 @@ app.get('/files/:id/preview', async (req, res) => {
       'Content-Disposition': `inline; filename*=UTF-8''${encodeURIComponent(f.name)}.pdf`,
     },
   });
+});
+
+// Texto extraído de un PDF o documento de oficina (usado por el MCP read_attachment)
+app.get('/files/:id/text', async (req, res) => {
+  const f = db.prepare('SELECT * FROM files WHERE id = ?').get(req.params.id);
+  if (!f) return res.status(404).json({ error: 'No encontrado' });
+  if (!hasPoppler) {
+    return res.status(501).json({ error: 'poppler no está instalado (apt install poppler-utils)' });
+  }
+  let pdfPath;
+  try {
+    pdfPath = await ensurePdf(f);
+  } catch (e) {
+    return res.status(500).json({ error: e.message });
+  }
+  if (!pdfPath) return res.status(400).json({ error: 'Este archivo no es PDF ni documento de oficina' });
+  try {
+    let text = await pdfToText(pdfPath);
+    const total = text.length;
+    const truncated = total > TEXT_EXTRACT_LIMIT;
+    if (truncated) text = text.slice(0, TEXT_EXTRACT_LIMIT);
+    res.json({ id: f.id, name: f.name, chars: total, truncated, scanned: text.trim().length < 16, text });
+  } catch (e) {
+    return res.status(500).json({ error: `No se pudo extraer el texto: ${e.message}` });
+  }
+});
+
+// Una página del documento renderizada a PNG (para PDFs escaneados o con diagramas)
+app.get('/files/:id/page/:page', async (req, res) => {
+  const f = db.prepare('SELECT * FROM files WHERE id = ?').get(req.params.id);
+  if (!f) return res.status(404).json({ error: 'No encontrado' });
+  if (!hasPoppler) return res.status(501).json({ error: 'poppler no está instalado (apt install poppler-utils)' });
+  const page = parseInt(req.params.page, 10);
+  if (!Number.isInteger(page) || page < 1) return res.status(400).json({ error: 'Número de página inválido' });
+  let pdfPath;
+  try {
+    pdfPath = await ensurePdf(f);
+  } catch (e) {
+    return res.status(500).json({ error: e.message });
+  }
+  if (!pdfPath) return res.status(400).json({ error: 'Este archivo no es PDF ni documento de oficina' });
+  try {
+    const png = await renderPdfPage(pdfPath, page, f.id);
+    res.sendFile(png, { headers: { 'Content-Type': 'image/png' } });
+  } catch (e) {
+    return res.status(500).json({ error: `No se pudo renderizar la página ${page}: ${e.message}` });
+  }
 });
 
 app.get('/files/:id/:name?', (req, res) => {
@@ -624,9 +724,7 @@ app.delete('/api/files/:id', (req, res) => {
   try {
     fs.unlinkSync(path.join(FILES_DIR, f.id));
   } catch {}
-  try {
-    fs.unlinkSync(previewPath(f.id));
-  } catch {}
+  clearPreviews(f.id);
   db.prepare('DELETE FROM files WHERE id = ?').run(f.id);
   res.json({ ok: true });
 });

@@ -47,8 +47,11 @@ Antes de crear, busca por si ya existe una página del tema y ofrécela.
   calendario. Estructura típica: 👥 Asistentes, 📋 Agenda, 📝 Notas, ✅ Acciones.
 - **Sin destino claro**: `create_page` sin `parent_id` la deja en "📥 Inbox",
   que el usuario organiza después.
-- **Adjuntos**: `read_page` lista los adjuntos con su `file_id`;
-  `read_attachment` los lee (texto e imágenes).
+- **Adjuntos**: `read_page` lista los adjuntos con su `file_id`.
+  `read_attachment` lee su contenido: extrae el texto de PDF, Word, Excel y
+  PowerPoint, y muestra imágenes y archivos de texto/código. Si un PDF está
+  escaneado o tiene diagramas/tablas que necesitas ver, usa
+  `read_document_pages` con el rango de páginas (p. ej. "1-5").
 
 ## Prohibiciones
 

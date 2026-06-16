@@ -12,6 +12,8 @@ import { DATA_DIR } from './db.js';
 
 const TEXT_LIMIT = 200 * 1024; // 200 KB para adjuntos de texto
 const IMAGE_LIMIT = 4 * 1024 * 1024; // 4 MB para imágenes
+const TEXT_EXTRACT_LIMIT_LABEL = '600 KB'; // coincide con TEXT_EXTRACT_LIMIT del servidor
+const MAX_RENDER_PAGES = 10;
 
 const EXT_MIME = {
   '.md': 'text/markdown', '.txt': 'text/plain', '.json': 'application/json',
@@ -53,7 +55,9 @@ export function mountMcp(app, port) {
       try {
         msg = (await res.json()).error || msg;
       } catch {}
-      throw new Error(msg);
+      const err = new Error(msg);
+      err.status = res.status;
+      throw err;
     }
     return res;
   }
@@ -281,26 +285,87 @@ export function mountMcp(app, port) {
       {
         title: 'Leer adjunto',
         description:
-          'Descarga un archivo adjunto de NoNotion por su file_id (visible en read_page). Devuelve texto para archivos de texto/código/JSON (hasta 200 KB) y la imagen para imágenes (hasta 4 MB); para otros tipos devuelve solo los metadatos.',
+          'Lee el contenido de un archivo adjunto de NoNotion por su file_id (visible en read_page). Extrae el texto de PDF, Word, Excel y PowerPoint; muestra imágenes; y devuelve el contenido de archivos de texto/código. Para PDFs escaneados o con diagramas que necesites ver, usa read_document_pages.',
         inputSchema: { file_id: z.string().describe('Id del archivo (file_id)') },
       },
       async ({ file_id }) => {
         try {
-          const res = await api(`/files/${file_id}`);
-          const mime = (res.headers.get('content-type') || '').split(';')[0];
-          const buf = Buffer.from(await res.arrayBuffer());
+          // HEAD para conocer el tipo sin descargar binarios grandes
+          const head = await api(`/files/${file_id}`, { method: 'HEAD' });
+          const mime = (head.headers.get('content-type') || '').split(';')[0];
+
           if (mime.startsWith('image/') && mime !== 'image/svg+xml') {
+            const buf = Buffer.from(await (await api(`/files/${file_id}`)).arrayBuffer());
             if (buf.length > IMAGE_LIMIT) return ok(`Imagen demasiado grande (${buf.length} bytes, máx. ${IMAGE_LIMIT}).`);
             return { content: [{ type: 'image', data: buf.toString('base64'), mimeType: mime }] };
           }
+
           if (isTextMime(mime)) {
+            const buf = Buffer.from(await (await api(`/files/${file_id}`)).arrayBuffer());
             if (buf.length > TEXT_LIMIT) {
-              return ok(`Archivo de texto demasiado grande (${buf.length} bytes). Primeros 200 KB:\n\n${buf.subarray(0, TEXT_LIMIT).toString('utf8')}`);
+              return ok(`Archivo de texto grande (${buf.length} bytes). Primeros 200 KB:\n\n${buf.subarray(0, TEXT_LIMIT).toString('utf8')}`);
             }
             return ok(buf.toString('utf8'));
           }
-          return ok(`Archivo binario (${mime || 'tipo desconocido'}, ${buf.length} bytes). No se puede mostrar; descargable desde la página en NoNotion.`);
+
+          // PDF / Word / Excel / PowerPoint → extracción de texto en el servidor
+          const r = await api(`/files/${file_id}/text`);
+          const data = await r.json();
+          if (data.scanned) {
+            return ok(
+              'El documento no tiene capa de texto (parece escaneado o solo imágenes). Usa read_document_pages para verlo como imágenes.'
+            );
+          }
+          let out = data.text;
+          if (data.truncated) {
+            out += `\n\n[… texto truncado: se muestran los primeros ${TEXT_EXTRACT_LIMIT_LABEL} de ${data.chars} caracteres. Pide una sección concreta o usa read_document_pages para páginas específicas.]`;
+          }
+          return ok(out);
         } catch (e) {
+          if (e.status === 501) {
+            return ok('Este archivo es binario y el servidor no tiene poppler instalado para extraer su contenido (apt install poppler-utils). Descargable desde la página en NoNotion.');
+          }
+          if (e.status === 400) {
+            return ok('Archivo binario sin extractor de texto disponible. Descargable desde la página en NoNotion.');
+          }
+          return fail(e);
+        }
+      }
+    );
+
+    server.registerTool(
+      'read_document_pages',
+      {
+        title: 'Ver páginas de documento',
+        description:
+          'Renderiza páginas concretas de un PDF o documento de oficina como imágenes, para leer documentos escaneados, diagramas, tablas con formato o cualquier cosa que la extracción de texto no capte bien. Indica las páginas (p. ej. "1-5" o "1,3,7"); máximo 10 por llamada.',
+        inputSchema: {
+          file_id: z.string().describe('Id del archivo (file_id)'),
+          pages: z.string().optional().describe('Páginas a renderizar, p. ej. "1-5" o "2,4,6". Por defecto "1-3".'),
+        },
+      },
+      async ({ file_id, pages = '1-3' }) => {
+        try {
+          const wanted = [];
+          for (const part of pages.split(',')) {
+            const m = part.trim().match(/^(\d+)(?:-(\d+))?$/);
+            if (!m) continue;
+            const from = parseInt(m[1], 10);
+            const to = m[2] ? parseInt(m[2], 10) : from;
+            for (let p = from; p <= to && wanted.length < MAX_RENDER_PAGES; p++) if (p >= 1) wanted.push(p);
+          }
+          if (!wanted.length) return fail(new Error('Especifica páginas válidas, p. ej. "1-5" o "2,4".'));
+          const content = [{ type: 'text', text: `Páginas ${wanted.join(', ')} del documento:` }];
+          for (const p of wanted) {
+            const res = await api(`/files/${file_id}/page/${p}`);
+            const buf = Buffer.from(await res.arrayBuffer());
+            content.push({ type: 'image', data: buf.toString('base64'), mimeType: 'image/png' });
+          }
+          return { content };
+        } catch (e) {
+          if (e.status === 501) {
+            return ok('El servidor no tiene poppler instalado para renderizar páginas (apt install poppler-utils).');
+          }
           return fail(e);
         }
       }
