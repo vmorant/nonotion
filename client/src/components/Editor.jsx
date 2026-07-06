@@ -1,4 +1,5 @@
 import { useEffect, useRef } from 'react';
+import { Extension } from '@tiptap/core';
 import { useEditor, EditorContent } from '@tiptap/react';
 import StarterKit from '@tiptap/starter-kit';
 import Link from '@tiptap/extension-link';
@@ -17,6 +18,28 @@ import SlashCommands from './SlashCommands.js';
 import { api } from '../api.js';
 
 const lowlight = createLowlight(common);
+
+// Captura Tab/Shift-Tab: indenta o desindenta en listas y de tareas; en el resto
+// inserta una tabulación. Siempre consume el evento para no perder el foco (evita
+// que el navegador salte al siguiente control de la interfaz).
+const TabHandler = Extension.create({
+  name: 'tabHandler',
+  priority: 100,
+  addKeyboardShortcuts() {
+    return {
+      Tab: () => {
+        if (this.editor.can().sinkListItem('listItem')) return this.editor.chain().focus().sinkListItem('listItem').run();
+        if (this.editor.can().sinkListItem('taskItem')) return this.editor.chain().focus().sinkListItem('taskItem').run();
+        return this.editor.chain().focus().insertContent('\t').run();
+      },
+      'Shift-Tab': () => {
+        if (this.editor.can().liftListItem('listItem')) return this.editor.chain().focus().liftListItem('listItem').run();
+        if (this.editor.can().liftListItem('taskItem')) return this.editor.chain().focus().liftListItem('taskItem').run();
+        return true; // consume el evento aunque no haya nada que desindentar
+      },
+    };
+  },
+});
 
 export const baseExtensions = [
   StarterKit.configure({ codeBlock: false }),
@@ -72,6 +95,7 @@ export default function Editor({ initialContent, onChange, onFileUploaded, pageI
   const editor = useEditor({
     extensions: [
       ...baseExtensions,
+      TabHandler,
       SlashCommands,
       Placeholder.configure({
         placeholder: "Escribe algo, pega Markdown de Claude, o usa '/' para comandos…",
