@@ -40,6 +40,10 @@ Antes de crear, busca por si ya existe una página del tema y ofrécela.
 - Escribe contenido limpio y final, sin meta-comentarios ("aquí tienes...").
 - Código relevante que el usuario querrá ejecutar o descargar: además del bloque
   en el markdown, adjúntalo como archivo con `attach_file` (p. ej. `script.sh`).
+- Binarios (Excel, Word, PDF, imágenes) con `attach_file` van en base64 y
+  **completos**. Si la herramienta responde que el archivo llegó incompleto, no
+  se ha guardado: vuelve a generarlo, o si es grande pon los datos en la página
+  como tabla Markdown (el usuario puede copiarla a Excel con un clic).
 
 ## Casos concretos
 
@@ -48,8 +52,8 @@ Antes de crear, busca por si ya existe una página del tema y ofrécela.
 - **Sin destino claro**: `create_page` sin `parent_id` la deja en "📥 Inbox",
   que el usuario organiza después.
 - **Adjuntos**: `read_page` lista los adjuntos con su `file_id`.
-  `read_attachment` lee su contenido: extrae el texto de PDF, Word, Excel y
-  PowerPoint, y muestra imágenes y archivos de texto/código. Si un PDF está
+  `read_attachment` lee su contenido: extrae el texto de PDF, Word y
+  PowerPoint, devuelve las hojas de Excel completas en CSV, y muestra imágenes y archivos de texto/código. Si un PDF está
   escaneado o tiene diagramas/tablas que necesitas ver, usa
   `read_document_pages` con el rango de páginas (p. ej. "1-5").
 

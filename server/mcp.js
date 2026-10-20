@@ -45,6 +45,41 @@ export function getOrCreateToken() {
 const isTextMime = (m = '') =>
   m.startsWith('text/') || /json|javascript|xml|x-sh|yaml|markdown/.test(m);
 
+// Formatos que son un ZIP por dentro: sin el registro final (EOCD) el archivo
+// está cortado y ningún programa lo abre
+const ZIP_EXT = new Set(['.zip', '.xlsx', '.xlsm', '.docx', '.pptx', '.odt', '.ods', '.odp', '.jar', '.epub']);
+
+function hasZipEnd(buf) {
+  const min = Math.max(0, buf.length - 22 - 65535);
+  for (let i = buf.length - 22; i >= min; i--) {
+    if (buf.readUInt32LE(i) === 0x06054b50 && i + 22 + buf.readUInt16LE(i + 20) === buf.length) return true;
+  }
+  return false;
+}
+
+// Comprueba que un archivo binario recibido por el MCP está completo. Claude
+// envía el binario en base64 dentro de la llamada y, si la respuesta se corta,
+// llegaría un archivo truncado que se guardaría roto sin avisar.
+export function checkAttachment(filename, content, encoding) {
+  const ext = path.extname(filename).toLowerCase();
+  const binary = ZIP_EXT.has(ext) || ['.pdf', '.png', '.jpg', '.jpeg', '.xls', '.doc', '.ppt'].includes(ext);
+  if (encoding !== 'base64') {
+    return binary ? `"${ext}" es un formato binario: envíalo con encoding "base64".` : null;
+  }
+  const clean = content.replace(/\s+/g, '');
+  if (!/^[A-Za-z0-9+/]*={0,2}$/.test(clean) || clean.length % 4 === 1) {
+    return 'El contenido base64 no es válido o está cortado.';
+  }
+  const buf = Buffer.from(clean, 'base64');
+  if (!buf.length) return 'El archivo está vacío.';
+  const cut = 'El archivo llegó incompleto (parece que el base64 se cortó): no se ha guardado. Vuelve a generarlo y envíalo entero; si es muy grande, guarda los datos en la página como tabla o divídelo en varios archivos.';
+  if (ZIP_EXT.has(ext) && (buf.readUInt32LE(0) !== 0x04034b50 || !hasZipEnd(buf))) return cut;
+  if (ext === '.pdf' && (!buf.subarray(0, 5).equals(Buffer.from('%PDF-')) || !buf.subarray(-2048).includes('%%EOF'))) return cut;
+  if (ext === '.png' && !buf.subarray(-12).includes('IEND')) return cut;
+  if ((ext === '.jpg' || ext === '.jpeg') && !(buf[buf.length - 2] === 0xff && buf[buf.length - 1] === 0xd9)) return cut;
+  return null;
+}
+
 export function mountMcp(app, port) {
   const token = getOrCreateToken();
   const base = `http://127.0.0.1:${port}`;
@@ -389,6 +424,8 @@ export function mountMcp(app, port) {
       },
       async ({ page_id, filename, content, encoding = 'text' }) => {
         try {
+          const problem = checkAttachment(filename, content, encoding);
+          if (problem) return { content: [{ type: 'text', text: `Error: ${problem}` }], isError: true };
           const data = encoding === 'base64' ? Buffer.from(content, 'base64') : Buffer.from(content, 'utf8');
           const mime = EXT_MIME[path.extname(filename).toLowerCase()] || 'application/octet-stream';
           const fd = new FormData();
