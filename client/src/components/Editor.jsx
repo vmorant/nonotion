@@ -13,9 +13,12 @@ import TableHeader from '@tiptap/extension-table-header';
 import TableCell from '@tiptap/extension-table-cell';
 import CodeBlockLowlight from '@tiptap/extension-code-block-lowlight';
 import { createLowlight, common } from 'lowlight';
+import { Slice, Fragment } from '@tiptap/pm/model';
 import { Markdown } from 'tiptap-markdown';
 import SlashCommands from './SlashCommands.js';
-import { withMarkdownTables } from '../tableMarkdown.js';
+import { HeadingFold } from './headingFold.js';
+import TableToolbar from './TableToolbar.jsx';
+import { withMarkdownTables, splitCellBreaks } from '../tableMarkdown.js';
 import { api } from '../api.js';
 
 const lowlight = createLowlight(common);
@@ -42,6 +45,23 @@ const TabHandler = Extension.create({
   },
 });
 
+// Al pegar Markdown de Claude, los <br> de las celdas de tabla llegan como
+// texto literal: se convierten en saltos de párrafo dentro de la celda
+function splitPastedBreaks(slice, schema) {
+  let found = false;
+  slice.content.descendants((node) => {
+    if (node.isText && /<br\s*\/?>/i.test(node.text)) found = true;
+    return !found;
+  });
+  if (!found) return slice;
+  const json = splitCellBreaks({ type: 'doc', content: slice.content.toJSON() || [] });
+  try {
+    return new Slice(Fragment.fromJSON(schema, json.content), slice.openStart, slice.openEnd);
+  } catch {
+    return slice;
+  }
+}
+
 export const baseExtensions = [
   StarterKit.configure({ codeBlock: false }),
   CodeBlockLowlight.configure({ lowlight }),
@@ -49,7 +69,8 @@ export const baseExtensions = [
   Image.configure({ allowBase64: false }),
   TaskList,
   TaskItem.configure({ nested: true }),
-  withMarkdownTables(Table).configure({ resizable: false }), // copiar/exportar sin perder tablas
+  // copiar/exportar sin perder tablas; columnas redimensionables arrastrando el borde
+  withMarkdownTables(Table).configure({ resizable: true, cellMinWidth: 60 }),
   TableRow,
   TableHeader,
   TableCell,
@@ -63,6 +84,7 @@ export const baseExtensions = [
 
 export default function Editor({ initialContent, onChange, onFileUploaded, pageId, onReady, onFocusChange }) {
   const fileInputRef = useRef(null);
+  const wrapRef = useRef(null);
   const [uploads, setUploads] = useState([]); // archivos pegados/arrastrados subiendo ahora
 
   const uploadAndInsert = async (editor, files) => {
@@ -105,12 +127,14 @@ export default function Editor({ initialContent, onChange, onFileUploaded, pageI
       ...baseExtensions,
       TabHandler,
       SlashCommands,
+      HeadingFold.configure({ pageId }),
       Placeholder.configure({
         placeholder: "Escribe algo, pega Markdown de Claude, o usa '/' para comandos…",
       }),
     ],
     content: initialContent || '',
     editorProps: {
+      transformPasted: (slice, view) => splitPastedBreaks(slice, view.state.schema),
       handlePaste: (view, event) => {
         const files = Array.from(event.clipboardData?.files || []);
         if (files.length > 0) {
@@ -153,7 +177,10 @@ export default function Editor({ initialContent, onChange, onFileUploaded, pageI
 
   return (
     <>
-      <EditorContent editor={editor} className="editor" />
+      <div className="editor-wrap" ref={wrapRef}>
+        <EditorContent editor={editor} className="editor" />
+        <TableToolbar editor={editor} containerRef={wrapRef} />
+      </div>
       {uploads.length > 0 && (
         <ul className="upload-list editor-uploads">
           {uploads.map((u) => (

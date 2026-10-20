@@ -16,6 +16,11 @@ Webapp autoalojada tipo Notion, **sin límites de capacidad**: tus apuntes, resp
 - **Papelera** — eliminar mueve a la papelera (con subpáginas y archivos); restaurable durante 30 días, después se purga automáticamente.
 - **Organiza arrastrando** — arrastra páginas en el árbol para reordenarlas o anidarlas; duplica páginas (subárbol y archivos incluidos) con un clic.
 - **Visor de documentos integrado** — clic en un adjunto y se abre dentro de NoNotion: PDF, imágenes, vídeo, audio y texto/código directamente, y **Word, Excel y PowerPoint** convertidos a PDF en el servidor con LibreOffice (con caché: la primera apertura tarda unos segundos, las siguientes son instantáneas). Nada sale de tu servidor — sin visores de Google/Microsoft.
+- **Visor de Excel de verdad** — los `.xlsx`, `.xls`, `.ods` y `.csv` se abren como hoja de cálculo: pestañas de hojas (las ocultas en cursiva), cabecera de columnas y números de fila fijos, celdas combinadas, anchos de columna del original y buscador que filtra filas. Si quieres ver el formato de impresión, "Ver como PDF" usa la conversión de LibreOffice. Claude (MCP `read_attachment`) recibe todas las hojas completas en CSV.
+- **Índice lateral y secciones plegables** — en páginas con 3 o más encabezados aparece un índice a la derecha que resalta la sección visible y salta a cada una. Cada encabezado tiene un triángulo para plegar su sección (solo visual: el contenido se guarda y exporta entero; lo plegado se recuerda por página en el navegador).
+- **Tablas cómodas** — cabecera fija al desplazarte, scroll horizontal en tablas anchas, columnas redimensionables arrastrando el borde, y una barra sobre la tabla para ordenar filas por la columna actual (entiende números como `1.234,5`), añadir/quitar filas y columnas y **copiar la tabla para pegarla en Excel**. Al pegar Markdown de Claude, los `<br>` de las celdas se convierten en saltos de línea.
+- **Ancho completo por página** — botón ↔ para usar todo el ancho de la pantalla (se guarda en la página, igual en todos tus dispositivos).
+- **Favoritas y recientes** — ★ en una página (o en su menú ⋯ del árbol) la fija arriba en la barra lateral; "Recientes" muestra las últimas páginas que abriste en ese navegador.
 - **Export ZIP completo** — descarga todo el workspace como Markdown + archivos adjuntos con enlaces relativos: backup portable, cero lock-in.
 - **Calendario propio (sin integraciones externas)** — vista mensual y semanal que muestra qué páginas creaste y editaste cada día (registro de actividad interno): de un vistazo ves en qué trabajaste y qué días no. Los datos antiguos se reconstruyen automáticamente desde el historial de versiones.
 - **Reuniones** — asigna una fecha a cualquier página y queda fijada ese día en el calendario (también fechas futuras). El botón "+" de un día crea una página de reunión con plantilla (asistentes, agenda, notas, acciones), y el comando `/reunión` inserta la misma plantilla en cualquier página.
@@ -200,6 +205,8 @@ En `skills/nonotion/SKILL.md` hay una skill lista para tu Claude: cópiala a `~/
 | GET/POST/DELETE | `/api/trash/files…` | Papelera de adjuntos: listar / restaurar / eliminar |
 | GET | `/files/:id/:nombre` | Descargar / ver archivo |
 | GET | `/files/:id/preview` | Documento de oficina convertido a PDF (LibreOffice, con caché) |
+| GET | `/files/:id/sheets` | Hoja de cálculo como JSON para el visor (hojas, celdas con formato, combinadas, anchos) |
+| POST | `/api/pages/:id/prefs` | Favorita / ancho completo (`{favorite?, full_width?}`); no crea versión ni cambia la revisión |
 | GET | `/api/search?q=` | Búsqueda full-text |
 | POST/DELETE | `/api/pages/:id/share` | Activar / desactivar enlace público |
 | GET | `/api/share/:token` | Página compartida (pública) |

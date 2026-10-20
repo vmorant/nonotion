@@ -288,7 +288,7 @@ export function mountMcp(app, port) {
       {
         title: 'Leer adjunto',
         description:
-          'Lee el contenido de un archivo adjunto de NoNotion por su file_id (visible en read_page). Extrae el texto de PDF, Word, Excel y PowerPoint; muestra imágenes; y devuelve el contenido de archivos de texto/código. Para PDFs escaneados o con diagramas que necesites ver, usa read_document_pages.',
+          'Lee el contenido de un archivo adjunto de NoNotion por su file_id (visible en read_page). Extrae el texto de PDF, Word y PowerPoint; las hojas de Excel/ODS las devuelve completas en CSV (una sección por hoja); muestra imágenes; y devuelve el contenido de archivos de texto/código. Para PDFs escaneados o con diagramas que necesites ver, usa read_document_pages.',
         inputSchema: { file_id: z.string().describe('Id del archivo (file_id)') },
       },
       async ({ file_id }) => {

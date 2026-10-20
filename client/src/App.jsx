@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import { Routes, Route, useNavigate, useLocation } from 'react-router-dom';
-import { api, CLIENT_ID, hasUnsavedWork } from './api.js';
+import { api, CLIENT_ID, hasUnsavedWork, readRecent, pushRecent } from './api.js';
 import Sidebar from './components/Sidebar.jsx';
 import PageView from './components/PageView.jsx';
 import SearchModal from './components/SearchModal.jsx';
@@ -14,6 +14,7 @@ export default function App() {
   const [trashOpen, setTrashOpen] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [pageEvent, setPageEvent] = useState(null); // { id, n } cuando una página cambia en remoto
+  const [recent, setRecent] = useState(readRecent);
   const navigate = useNavigate();
   const location = useLocation();
 
@@ -63,6 +64,12 @@ export default function App() {
     };
   }, [refreshTree]);
 
+  // Recientes: las páginas que se abren en este navegador
+  useEffect(() => {
+    const m = location.pathname.match(/^\/p\/([^/]+)/);
+    if (m) setRecent(pushRecent(m[1]));
+  }, [location.pathname]);
+
   useEffect(() => {
     const onKey = (e) => {
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') {
@@ -92,6 +99,11 @@ export default function App() {
     navigate(`/p/${copy.id}`);
   };
 
+  const setFavorite = async (id, favorite) => {
+    await api.pagePrefs(id, { favorite });
+    await refreshTree();
+  };
+
   const movePage = async (id, parentId, index) => {
     try {
       await api.movePage(id, parentId, index);
@@ -106,7 +118,9 @@ export default function App() {
       {sidebarOpen && (
         <Sidebar
           pages={pages}
+          recent={recent}
           me={me}
+          onFavorite={setFavorite}
           onCreate={createPage}
           onDelete={deletePage}
           onDuplicate={duplicatePage}
@@ -133,6 +147,7 @@ export default function App() {
                 onDelete={deletePage}
                 onCreateChild={createPage}
                 onDuplicate={duplicatePage}
+                onFavorite={setFavorite}
               />
             }
           />

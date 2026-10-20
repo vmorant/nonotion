@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { NavLink, useNavigate } from 'react-router-dom';
 import { api } from '../api.js';
 
-function TreeItem({ page, index, childrenMap, depth, onCreate, onDelete, onDuplicate, onMove }) {
+function TreeItem({ page, index, childrenMap, depth, onCreate, onDelete, onDuplicate, onMove, onFavorite }) {
   const [open, setOpen] = useState(depth < 1);
   const [menuOpen, setMenuOpen] = useState(false);
   const [dropZone, setDropZone] = useState(null); // 'before' | 'inside' | 'after'
@@ -114,6 +114,14 @@ function TreeItem({ page, index, childrenMap, depth, onCreate, onDelete, onDupli
             Duplicar
           </button>
           <button
+            onClick={() => {
+              setMenuOpen(false);
+              onFavorite(page.id, !page.favorite_at);
+            }}
+          >
+            {page.favorite_at ? 'Quitar de favoritas' : 'Añadir a favoritas'}
+          </button>
+          <button
             className="danger"
             onClick={() => {
               setMenuOpen(false);
@@ -136,13 +144,64 @@ function TreeItem({ page, index, childrenMap, depth, onCreate, onDelete, onDupli
             onDelete={onDelete}
             onDuplicate={onDuplicate}
             onMove={onMove}
+            onFavorite={onFavorite}
           />
         ))}
     </div>
   );
 }
 
-export default function Sidebar({ pages, me, onCreate, onDelete, onDuplicate, onMove, onSearch, onCollapse, onOpenTrash }) {
+// Sección plegable de accesos rápidos (Favoritas, Recientes); se recuerda si está plegada
+function QuickSection({ name, title, items, byId }) {
+  const storeKey = `nn:sec:${name}`;
+  const [open, setOpen] = useState(() => {
+    try {
+      return localStorage.getItem(storeKey) !== 'closed';
+    } catch {
+      return true;
+    }
+  });
+  if (!items.length) return null;
+  const toggle = () => {
+    setOpen(!open);
+    try {
+      localStorage.setItem(storeKey, open ? 'closed' : 'open');
+    } catch {}
+  };
+  return (
+    <div className="sidebar-section quick-section">
+      <button className="sidebar-section-title quick-title" onClick={toggle}>
+        <span>
+          {open ? '▾' : '▸'} {title}
+        </span>
+      </button>
+      {open &&
+        items.map((p) => {
+          const parent = p.parent_id ? byId.get(p.parent_id) : null;
+          return (
+            <NavLink
+              key={p.id}
+              to={`/p/${p.id}`}
+              className={({ isActive }) => 'tree-item quick-item' + (isActive ? ' active' : '')}
+              title={parent ? `${parent.title || 'Sin título'} / ${p.title || 'Sin título'}` : p.title}
+            >
+              <span className="tree-icon">{p.icon || '📄'}</span>
+              <span className="tree-title">{p.title || 'Sin título'}</span>
+              {parent && <span className="quick-parent">{parent.title || 'Sin título'}</span>}
+            </NavLink>
+          );
+        })}
+    </div>
+  );
+}
+
+const RECENT_SHOWN = 5;
+
+export default function Sidebar({ pages, recent = [], me, onCreate, onDelete, onDuplicate, onMove, onFavorite, onSearch, onCollapse, onOpenTrash }) {
+  const byId = new Map(pages.map((p) => [p.id, p]));
+  const favorites = pages.filter((p) => p.favorite_at).sort((a, b) => a.favorite_at.localeCompare(b.favorite_at));
+  const recentPages = recent.map((id) => byId.get(id)).filter(Boolean).slice(0, RECENT_SHOWN);
+
   const childrenMap = new Map();
   for (const p of pages) {
     const key = p.parent_id || null;
@@ -162,6 +221,9 @@ export default function Sidebar({ pages, me, onCreate, onDelete, onDuplicate, on
       <button className="sidebar-search" onClick={onSearch}>
         🔍 Buscar <kbd>Ctrl+K</kbd>
       </button>
+      <div className="sidebar-scroll">
+      <QuickSection name="favorites" title="Favoritas" items={favorites} byId={byId} />
+      <QuickSection name="recent" title="Recientes" items={recentPages} byId={byId} />
       <div className="sidebar-section">
         <div className="sidebar-section-title">
           <span>Páginas</span>
@@ -192,9 +254,11 @@ export default function Sidebar({ pages, me, onCreate, onDelete, onDuplicate, on
               onDelete={onDelete}
               onDuplicate={onDuplicate}
               onMove={onMove}
+              onFavorite={onFavorite}
             />
           ))}
         </div>
+      </div>
       </div>
       <div className="sidebar-tools">
         <NavLink to="/calendar" className={({ isActive }) => 'sidebar-tool-link' + (isActive ? ' active' : '')}>

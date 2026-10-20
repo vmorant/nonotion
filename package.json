@@ -10,6 +10,7 @@
     "test": "node client/smoke.mjs"
   },
   "dependencies": {
+    "@e965/xlsx": "0.20.3",
     "@modelcontextprotocol/sdk": "^1.29.0",
     "@tiptap/core": "^2.11.5",
     "@tiptap/extension-code-block-lowlight": "^2.11.5",

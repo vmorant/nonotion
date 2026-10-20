@@ -5,6 +5,7 @@ import Editor from './Editor.jsx';
 import Attachments from './Attachments.jsx';
 import EmojiPicker from './EmojiPicker.jsx';
 import HistoryModal from './HistoryModal.jsx';
+import PageOutline from './PageOutline.jsx';
 
 function breadcrumb(pages, id) {
   const byId = new Map(pages.map((p) => [p.id, p]));
@@ -50,7 +51,7 @@ function draftDiffers(draft, page) {
   return false;
 }
 
-export default function PageView({ pages, pageEvent, onTreeChange, onDelete, onCreateChild, onDuplicate }) {
+export default function PageView({ pages, pageEvent, onTreeChange, onDelete, onCreateChild, onDuplicate, onFavorite }) {
   const { id } = useParams();
   const [page, setPage] = useState(null);
   const [files, setFiles] = useState([]);
@@ -64,6 +65,8 @@ export default function PageView({ pages, pageEvent, onTreeChange, onDelete, onC
   const [remoteChange, setRemoteChange] = useState(false); // aviso de cambio remoto mientras editas
   const [conflictSaved, setConflictSaved] = useState(false); // la versión ajena quedó en el historial
   const [draftOffer, setDraftOffer] = useState(null); // borrador local pendiente de recuperar
+  const [editor, setEditor] = useState(null);
+  const [prefsOverride, setPrefsOverride] = useState({}); // cambio local hasta que llegue el árbol
   const editorRef = useRef(null);
   const focusedRef = useRef(false);
   const saveTimer = useRef(null);
@@ -182,6 +185,8 @@ export default function PageView({ pages, pageEvent, onTreeChange, onDelete, onC
     setRemoteChange(false);
     setConflictSaved(false);
     setDraftOffer(null);
+    setPrefsOverride({});
+    setEditor(null);
     setStatus('saved');
     inFlight.current = false;
     again.current = false;
@@ -276,6 +281,25 @@ export default function PageView({ pages, pageEvent, onTreeChange, onDelete, onC
   if (!page) return <div className="page-loading">Cargando…</div>;
 
   const crumbs = breadcrumb(pages, id);
+  const meta = pages.find((p) => p.id === id) || page;
+  const fullWidth = prefsOverride.full_width ?? !!meta.full_width;
+  const favorite = prefsOverride.favorite ?? !!meta.favorite_at;
+
+  const setPref = async (key, value) => {
+    setPrefsOverride((o) => ({ ...o, [key]: value }));
+    try {
+      if (key === 'favorite') await onFavorite(id, value);
+      else {
+        await api.pagePrefs(id, { [key]: value });
+        await onTreeChange();
+      }
+    } finally {
+      setPrefsOverride((o) => {
+        const { [key]: _, ...rest } = o;
+        return rest;
+      });
+    }
+  };
 
   const toggleShare = async () => {
     if (shareToken) {
@@ -392,6 +416,20 @@ export default function PageView({ pages, pageEvent, onTreeChange, onDelete, onC
               queueSave({ page_date: v });
             }}
           />
+          <button
+            className={'btn' + (favorite ? ' favorite' : '')}
+            onClick={() => setPref('favorite', !favorite)}
+            title={favorite ? 'Quitar de favoritas' : 'Añadir a favoritas (aparece arriba en la barra lateral)'}
+          >
+            {favorite ? '★' : '☆'}
+          </button>
+          <button
+            className={'btn' + (fullWidth ? ' active' : '')}
+            onClick={() => setPref('full_width', !fullWidth)}
+            title={fullWidth ? 'Volver al ancho normal' : 'Usar todo el ancho de la pantalla'}
+          >
+            ↔
+          </button>
           <button className="btn" onClick={() => setHistoryOpen(true)} title="Historial de versiones">
             🕘
           </button>
@@ -436,7 +474,8 @@ export default function PageView({ pages, pageEvent, onTreeChange, onDelete, onC
         </div>
       </div>
 
-      <div className="page-body">
+      <div className="page-columns">
+      <div className={'page-body' + (fullWidth ? ' full' : '')}>
         <div className="page-head">
           <button className="page-icon" onClick={() => setEmojiOpen((v) => !v)} title="Cambiar icono">
             {page.icon || '📄'}
@@ -466,13 +505,18 @@ export default function PageView({ pages, pageEvent, onTreeChange, onDelete, onC
           key={`${id}:${reloadKey}`}
           pageId={id}
           initialContent={parseContent(page.content)}
-          onReady={(ed) => (editorRef.current = ed)}
+          onReady={(ed) => {
+            editorRef.current = ed;
+            setEditor(ed);
+          }}
           onChange={({ json, text }) => queueSave({ content: json, content_text: text })}
           onFocusChange={(f) => (focusedRef.current = f)}
           onFileUploaded={(f) => setFiles((prev) => [...prev, f])}
         />
 
         <Attachments pageId={id} files={files} onChange={setFiles} />
+      </div>
+      <PageOutline editor={editor} />
       </div>
 
       {historyOpen && <HistoryModal pageId={id} onClose={() => setHistoryOpen(false)} onRestored={onVersionRestored} />}

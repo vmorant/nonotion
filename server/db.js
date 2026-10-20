@@ -79,6 +79,14 @@ if (!pageCols.includes('rev')) {
   db.exec('ALTER TABLE pages ADD COLUMN rev INTEGER NOT NULL DEFAULT 0');
 }
 
+// Favoritas (fecha en que se marcó, para ordenarlas) y ancho completo por página
+if (!pageCols.includes('favorite_at')) {
+  db.exec('ALTER TABLE pages ADD COLUMN favorite_at TEXT');
+}
+if (!pageCols.includes('full_width')) {
+  db.exec('ALTER TABLE pages ADD COLUMN full_width INTEGER NOT NULL DEFAULT 0');
+}
+
 // Papelera de adjuntos: borrar un archivo lo marca, no lo elimina del disco
 const fileCols = db.prepare('PRAGMA table_info(files)').all().map((c) => c.name);
 if (!fileCols.includes('deleted_at')) {

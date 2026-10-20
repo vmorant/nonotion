@@ -143,6 +143,8 @@ export const api = {
   movePage: (id, parentId, index) =>
     req(`/api/pages/${id}/move`, { method: 'POST', body: JSON.stringify({ parent_id: parentId, index }) }),
   duplicatePage: (id) => req(`/api/pages/${id}/duplicate`, { method: 'POST' }),
+  pagePrefs: (id, prefs) => req(`/api/pages/${id}/prefs`, { method: 'POST', body: JSON.stringify(prefs) }),
+  sheets: (fileId) => req(`/files/${fileId}/sheets`),
   trash: () => req('/api/trash'),
   restoreTrash: (id) => req(`/api/trash/${id}/restore`, { method: 'POST' }),
   deleteTrashItem: (id) => req(`/api/trash/${id}`, { method: 'DELETE' }),
@@ -171,6 +173,25 @@ export function parseContent(content) {
     }
   }
   return content;
+}
+
+// Páginas visitadas hace poco en este navegador (para "Recientes")
+const RECENT_KEY = 'nn:recent';
+const RECENT_MAX = 8;
+export function readRecent() {
+  try {
+    const list = JSON.parse(localStorage.getItem(RECENT_KEY) || '[]');
+    return Array.isArray(list) ? list : [];
+  } catch {
+    return [];
+  }
+}
+export function pushRecent(id) {
+  const list = [id, ...readRecent().filter((x) => x !== id)].slice(0, RECENT_MAX);
+  try {
+    localStorage.setItem(RECENT_KEY, JSON.stringify(list));
+  } catch {}
+  return list;
 }
 
 export function humanSize(bytes) {

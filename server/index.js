@@ -6,6 +6,7 @@ import multer from 'multer';
 import { nanoid } from 'nanoid';
 import { fileURLToPath } from 'url';
 import { spawnSync, execFile } from 'child_process';
+import { Worker } from 'worker_threads';
 import db, { DATA_DIR, FILES_DIR, ftsUpsert, ftsDelete, extractText, logActivity } from './db.js';
 import { docToMarkdown, markdownToDoc, appendMarkdown, replaceInDoc, EditError } from './markdown.js';
 import { mountMcp, getOrCreateToken } from './mcp.js';
@@ -127,7 +128,7 @@ app.get('/api/pages', (req, res) => {
   const rows = db
     .prepare(
       `SELECT id, parent_id, title, icon, position, updated_at, page_date,
-              share_token IS NOT NULL AS shared
+              share_token IS NOT NULL AS shared, favorite_at, full_width
        FROM pages WHERE trashed_at IS NULL ORDER BY position, created_at`
     )
     .all();
@@ -238,6 +239,24 @@ app.put('/api/pages/:id', (req, res) => {
     notifyTree(req);
   }
   res.json({ ...updated, conflict });
+});
+
+// Preferencias de visualización (favorita, ancho completo): no son ediciones,
+// así que no cambian la revisión, la fecha de modificación ni el historial
+app.post('/api/pages/:id/prefs', (req, res) => {
+  const page = db.prepare('SELECT id FROM pages WHERE id = ?').get(req.params.id);
+  if (!page) return res.status(404).json({ error: 'Página no encontrada' });
+  const b = req.body || {};
+  if (typeof b.favorite === 'boolean') {
+    db.prepare(
+      `UPDATE pages SET favorite_at = CASE WHEN ? THEN COALESCE(favorite_at, datetime('now')) ELSE NULL END WHERE id = ?`
+    ).run(b.favorite ? 1 : 0, page.id);
+  }
+  if (typeof b.full_width === 'boolean') {
+    db.prepare('UPDATE pages SET full_width = ? WHERE id = ?').run(b.full_width ? 1 : 0, page.id);
+  }
+  notifyTree(req);
+  res.json(db.prepare('SELECT id, favorite_at, full_width FROM pages WHERE id = ?').get(page.id));
 });
 
 // Mover en el árbol: nuevo padre + posición exacta entre hermanos
@@ -936,6 +955,66 @@ function convertToPdf(f) {
   });
 }
 
+// ---------- Hojas de cálculo (visor de Excel y lectura para Claude) ----------
+
+const SHEET_EXT = new Set(['.xlsx', '.xlsm', '.xls', '.ods', '.csv', '.tsv']);
+const SHEET_TIMEOUT_MS = 90000;
+const sheetsInFlight = new Map();
+const isSheet = (f) => SHEET_EXT.has(path.extname(f.name).toLowerCase());
+
+// Lee la hoja en un worker (cacheado en previews/<id>.sheets.json)
+function readSheets(f) {
+  const cache = path.join(PREVIEWS_DIR, `${f.id}.sheets.json`);
+  if (fs.existsSync(cache)) {
+    try {
+      return Promise.resolve(JSON.parse(fs.readFileSync(cache, 'utf8')));
+    } catch {}
+  }
+  if (sheetsInFlight.has(f.id)) return sheetsInFlight.get(f.id);
+  const job = new Promise((resolve, reject) => {
+    const worker = new Worker(new URL('./sheets-worker.js', import.meta.url), {
+      workerData: {
+        filePath: path.join(FILES_DIR, f.id),
+        ext: path.extname(f.name).toLowerCase(),
+        textLimit: TEXT_EXTRACT_LIMIT,
+      },
+      resourceLimits: { maxOldGenerationSizeMb: 1536 },
+    });
+    const timer = setTimeout(() => {
+      worker.terminate();
+      reject(new Error('La hoja de cálculo tarda demasiado en leerse'));
+    }, SHEET_TIMEOUT_MS);
+    worker.once('message', (msg) => {
+      clearTimeout(timer);
+      worker.terminate();
+      if (!msg.ok) return reject(new Error(msg.error));
+      delete msg.ok;
+      try {
+        fs.writeFileSync(cache, JSON.stringify(msg));
+      } catch {}
+      resolve(msg);
+    });
+    worker.once('error', (e) => {
+      clearTimeout(timer);
+      reject(e);
+    });
+  }).finally(() => sheetsInFlight.delete(f.id));
+  sheetsInFlight.set(f.id, job);
+  return job;
+}
+
+app.get('/files/:id/sheets', async (req, res) => {
+  const f = db.prepare('SELECT * FROM files WHERE id = ? AND deleted_at IS NULL').get(req.params.id);
+  if (!f) return res.status(404).json({ error: 'No encontrado' });
+  if (!isSheet(f)) return res.status(400).json({ error: 'Este archivo no es una hoja de cálculo' });
+  try {
+    const data = await readSheets(f);
+    res.json({ id: f.id, name: f.name, sheets: data.sheets });
+  } catch (e) {
+    res.status(500).json({ error: `No se pudo leer la hoja de cálculo: ${e.message}` });
+  }
+});
+
 app.get('/files/:id/preview', async (req, res) => {
   const f = db.prepare('SELECT * FROM files WHERE id = ? AND deleted_at IS NULL').get(req.params.id);
   if (!f) return res.status(404).json({ error: 'No encontrado' });
@@ -965,6 +1044,16 @@ app.get('/files/:id/preview', async (req, res) => {
 app.get('/files/:id/text', async (req, res) => {
   const f = db.prepare('SELECT * FROM files WHERE id = ? AND deleted_at IS NULL').get(req.params.id);
   if (!f) return res.status(404).json({ error: 'No encontrado' });
+  // Hojas de cálculo: todas las hojas en CSV (mucho más fiel que pasar por PDF)
+  if (isSheet(f)) {
+    try {
+      const data = await readSheets(f);
+      return res.json({ id: f.id, name: f.name, chars: data.chars, truncated: data.truncated, scanned: false, text: data.text });
+    } catch (e) {
+      if (!hasSoffice || !hasPoppler) return res.status(500).json({ error: e.message });
+      // si falla la lectura directa se intenta la vía PDF
+    }
+  }
   if (!hasPoppler) {
     return res.status(501).json({ error: 'poppler no está instalado (apt install poppler-utils)' });
   }
