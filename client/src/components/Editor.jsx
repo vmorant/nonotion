@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Extension } from '@tiptap/core';
 import { useEditor, EditorContent } from '@tiptap/react';
 import StarterKit from '@tiptap/starter-kit';
@@ -62,11 +62,17 @@ export const baseExtensions = [
 
 export default function Editor({ initialContent, onChange, onFileUploaded, pageId, onReady, onFocusChange }) {
   const fileInputRef = useRef(null);
+  const [uploads, setUploads] = useState([]); // archivos pegados/arrastrados subiendo ahora
 
   const uploadAndInsert = async (editor, files) => {
     for (const file of files) {
+      const key = `${file.name}-${Math.random().toString(36).slice(2)}`;
+      setUploads((u) => [...u, { key, name: file.name, pct: 0 }]);
       try {
-        const meta = await api.uploadFile(file, pageId);
+        const meta = await api.uploadFile(file, pageId, (frac) =>
+          setUploads((u) => u.map((it) => (it.key === key ? { ...it, pct: Math.round(frac * 100) } : it)))
+        );
+        setUploads((u) => u.filter((it) => it.key !== key));
         if (file.type.startsWith('image/')) {
           editor.chain().focus().setImage({ src: meta.url, alt: meta.name }).run();
         } else {
@@ -88,6 +94,7 @@ export default function Editor({ initialContent, onChange, onFileUploaded, pageI
         onFileUploaded?.(meta);
       } catch (err) {
         console.error('Error subiendo archivo', err);
+        setUploads((u) => u.map((it) => (it.key === key ? { ...it, error: err.message } : it)));
       }
     }
   };
@@ -146,6 +153,34 @@ export default function Editor({ initialContent, onChange, onFileUploaded, pageI
   return (
     <>
       <EditorContent editor={editor} className="editor" />
+      {uploads.length > 0 && (
+        <ul className="upload-list editor-uploads">
+          {uploads.map((u) => (
+            <li key={u.key} className={'upload-item' + (u.error ? ' error' : '')}>
+              <div className="upload-row">
+                <span className="upload-name">{u.name}</span>
+                <span className="upload-pct">{u.error ? '⚠' : `${u.pct}%`}</span>
+                {u.error && (
+                  <button
+                    className="icon-btn"
+                    title="Cerrar"
+                    onClick={() => setUploads((list) => list.filter((it) => it.key !== u.key))}
+                  >
+                    ✕
+                  </button>
+                )}
+              </div>
+              {u.error ? (
+                <div className="upload-error">{u.error}</div>
+              ) : (
+                <div className="upload-bar">
+                  <div className="upload-bar-fill" style={{ width: `${u.pct}%` }} />
+                </div>
+              )}
+            </li>
+          ))}
+        </ul>
+      )}
       <input
         ref={fileInputRef}
         type="file"

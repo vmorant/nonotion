@@ -28,7 +28,9 @@ const EXT_MIME = {
   '.pptx': 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
 };
 
-function getOrCreateToken() {
+// El mismo token sirve para el conector MCP (en la URL) y como token de API
+// (Authorization: Bearer) para los scripts CLI y las llamadas internas del MCP.
+export function getOrCreateToken() {
   const tokenFile = path.join(DATA_DIR, 'mcp_token');
   try {
     const existing = fs.readFileSync(tokenFile, 'utf8').trim();
@@ -47,7 +49,7 @@ export function mountMcp(app, port) {
   const base = `http://127.0.0.1:${port}`;
 
   async function api(p, options = {}) {
-    const headers = { ...(options.headers || {}) };
+    const headers = { Authorization: `Bearer ${token}`, ...(options.headers || {}) };
     if (options.body && typeof options.body === 'string') headers['Content-Type'] = 'application/json';
     const res = await fetch(base + p, { ...options, headers });
     if (!res.ok) {

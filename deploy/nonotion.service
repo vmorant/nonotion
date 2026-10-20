@@ -1,6 +1,7 @@
 [Unit]
 Description=NoNotion - apuntes, IA y archivos autoalojados
-After=network.target
+After=network-online.target
+Wants=network-online.target
 
 [Service]
 Type=simple
@@ -10,13 +11,18 @@ WorkingDirectory=/opt/nonotion
 Environment=NODE_ENV=production
 Environment=PORT=3000
 Environment=DATA_DIR=/var/lib/nonotion
+# Login con GitHub y URL pública (ver README). El "-" lo hace opcional.
+EnvironmentFile=-/etc/nonotion.env
 ExecStart=/usr/bin/node server/index.js
 Restart=always
 RestartSec=3
+TimeoutStopSec=20
 
 # Endurecimiento básico
 NoNewPrivileges=true
 ProtectSystem=full
+ProtectHome=true
+PrivateTmp=true
 ReadWritePaths=/var/lib/nonotion
 
 [Install]

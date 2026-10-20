@@ -17,7 +17,8 @@ export default function Attachments({ pageId, files, onChange }) {
   const [dragOver, setDragOver] = useState(false);
   const [uploads, setUploads] = useState([]); // [{ key, name, pct, error }]
   const [viewing, setViewing] = useState(null);
-  const uploading = uploads.length > 0;
+  const [notice, setNotice] = useState(null);
+  const uploading = uploads.some((u) => !u.error);
 
   const uploadFiles = async (list) => {
     const items = Array.from(list).map((file) => ({
@@ -38,9 +39,12 @@ export default function Attachments({ pageId, files, onChange }) {
     }
   };
 
-  const remove = async (id) => {
-    await api.deleteFile(id);
-    onChange(files.filter((f) => f.id !== id));
+  // Borrar un adjunto lo manda a la papelera: se puede recuperar 30 días
+  const remove = async (f) => {
+    await api.deleteFile(f.id);
+    onChange((prev) => prev.filter((x) => x.id !== f.id));
+    setNotice(`"${f.name}" movido a la papelera (recuperable 30 días desde 🗑 Papelera).`);
+    setTimeout(() => setNotice(null), 6000);
   };
 
   return (
@@ -59,10 +63,11 @@ export default function Attachments({ pageId, files, onChange }) {
     >
       <div className="attachments-header">
         <span>📎 Archivos adjuntos ({files.length})</span>
-        <button className="btn" onClick={() => inputRef.current?.click()} disabled={uploading}>
-          {uploading ? 'Subiendo…' : '+ Subir archivo'}
+        <button className="btn" onClick={() => inputRef.current?.click()}>
+          {uploading ? '+ Subir más' : '+ Subir archivo'}
         </button>
       </div>
+      {notice && <div className="attachments-notice">{notice}</div>}
       {files.length === 0 && uploads.length === 0 && (
         <div className="attachments-empty">Arrastra archivos aquí o usa el botón. Sin límite de tamaño.</div>
       )}
@@ -73,6 +78,15 @@ export default function Attachments({ pageId, files, onChange }) {
               <div className="upload-row">
                 <span className="upload-name">{u.name}</span>
                 <span className="upload-pct">{u.error ? '⚠' : `${u.pct}%`}</span>
+                {u.error && (
+                  <button
+                    className="icon-btn"
+                    title="Cerrar"
+                    onClick={() => setUploads((list) => list.filter((it) => it.key !== u.key))}
+                  >
+                    ✕
+                  </button>
+                )}
               </div>
               {u.error ? (
                 <div className="upload-error">{u.error}</div>
@@ -105,7 +119,7 @@ export default function Attachments({ pageId, files, onChange }) {
               {f.name}
             </a>
             <span className="file-size">{humanSize(f.size)}</span>
-            <button className="icon-btn danger" onClick={() => remove(f.id)} title="Eliminar archivo">
+            <button className="icon-btn danger" onClick={() => remove(f)} title="Mover a la papelera">
               ✕
             </button>
           </li>

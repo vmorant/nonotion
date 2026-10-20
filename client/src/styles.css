@@ -393,8 +393,9 @@ kbd {
   color: var(--text-dim);
 }
 
-.save-status.error {
-  color: var(--danger);
+.save-status.error,
+.save-status.retrying {
+  color: #e8b339;
 }
 
 .share-wrap {
@@ -1346,6 +1347,51 @@ button.page-icon:hover {
 .upload-error {
   font-size: 0.78rem;
   color: var(--danger);
+}
+
+.editor-uploads {
+  margin-top: 12px;
+}
+
+.attachments-notice {
+  margin-top: 10px;
+  padding: 7px 10px;
+  border-radius: var(--radius);
+  background: var(--bg-sidebar);
+  color: var(--text-dim);
+  font-size: 0.82rem;
+}
+
+.draft-banner {
+  background: #1a2a3a;
+  border-bottom-color: #2f4f6f;
+  color: #9ecbff;
+}
+
+.trash-section {
+  padding: 10px 8px 4px;
+  font-size: 0.72rem;
+  color: var(--text-dim);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.sidebar-user {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.sidebar-avatar {
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+}
+
+.sidebar-login {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 /* ---------- Visor de archivos ---------- */

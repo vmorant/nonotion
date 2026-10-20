@@ -8,7 +8,8 @@ import { fileURLToPath } from 'url';
 import { spawnSync, execFile } from 'child_process';
 import db, { DATA_DIR, FILES_DIR, ftsUpsert, ftsDelete, extractText, logActivity } from './db.js';
 import { docToMarkdown } from './markdown.js';
-import { mountMcp } from './mcp.js';
+import { mountMcp, getOrCreateToken } from './mcp.js';
+import { setupAuth, purgeExpiredSessions } from './auth.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PORT = process.env.PORT || 3000;
@@ -19,6 +20,11 @@ const MAX_VERSIONS_PER_PAGE = 50;
 const app = express();
 app.disable('x-powered-by');
 app.use(express.json({ limit: '100mb' }));
+
+// Login con GitHub + token de API. Va antes que cualquier ruta.
+const authCfg = setupAuth(app, { apiToken: getOrCreateToken() });
+
+app.get('/api/health', (req, res) => res.json({ ok: true }));
 
 const upload = multer({
   storage: multer.diskStorage({
@@ -102,10 +108,14 @@ app.get('/api/events', (req, res) => {
   });
 });
 
-// ---------- Identidad (Cloudflare Access) ----------
+// ---------- Identidad ----------
 
 app.get('/api/me', (req, res) => {
-  res.json({ email: req.headers['cf-access-authenticated-user-email'] || null });
+  res.json({
+    email: req.headers['cf-access-authenticated-user-email'] || null,
+    auth: authCfg.mode,
+    user: req.authKind === 'session' ? req.user : null,
+  });
 });
 
 // ---------- Páginas ----------
@@ -143,7 +153,7 @@ app.get('/api/pages/:id', (req, res) => {
   const page = db.prepare('SELECT * FROM pages WHERE id = ?').get(req.params.id);
   if (!page) return res.status(404).json({ error: 'Página no encontrada' });
   page.files = db
-    .prepare('SELECT id, name, mime, size, created_at FROM files WHERE page_id = ? ORDER BY created_at')
+    .prepare('SELECT id, name, mime, size, created_at FROM files WHERE page_id = ? AND deleted_at IS NULL ORDER BY created_at')
     .all(page.id);
   res.json(page);
 });
@@ -194,12 +204,21 @@ app.put('/api/pages/:id', (req, res) => {
 
   if (Object.keys(fields).length === 0) return res.json(page);
 
+  // Nada se pierde al sobrescribir el contenido:
+  //  - si el cliente partía de una revisión antigua (otro dispositivo o Claude
+  //    cambió la página entre medias), guardamos SIEMPRE la versión actual;
+  //  - las escrituras sin X-Client-Id (MCP, CLI) también guardan siempre;
+  //  - las del editor normal, como mucho una versión cada 10 minutos.
+  let conflict = false;
   if (fields.content !== undefined && fields.content !== page.content && page.content) {
-    snapshotVersion(page, { throttled: true });
+    const baseRev = typeof b.base_rev === 'number' ? b.base_rev : null;
+    conflict = baseRev !== null && baseRev !== page.rev;
+    const external = !req.headers['x-client-id'];
+    snapshotVersion(page, { throttled: !conflict && !external });
   }
 
   const sets = Object.keys(fields).map((k) => `${k} = ?`).join(', ');
-  db.prepare(`UPDATE pages SET ${sets}, updated_at = datetime('now') WHERE id = ?`).run(
+  db.prepare(`UPDATE pages SET ${sets}, rev = rev + 1, updated_at = datetime('now') WHERE id = ?`).run(
     ...Object.values(fields),
     page.id
   );
@@ -215,7 +234,7 @@ app.put('/api/pages/:id', (req, res) => {
   if (fields.title !== undefined || fields.icon !== undefined || fields.parent_id !== undefined || fields.page_date !== undefined) {
     notifyTree(req);
   }
-  res.json(updated);
+  res.json({ ...updated, conflict });
 });
 
 // Mover en el árbol: nuevo padre + posición exacta entre hermanos
@@ -276,7 +295,7 @@ app.post('/api/pages/:id/duplicate', (req, res) => {
       position ?? src.position
     );
     let content = src.content;
-    const files = db.prepare('SELECT * FROM files WHERE page_id = ?').all(srcId);
+    const files = db.prepare('SELECT * FROM files WHERE page_id = ? AND deleted_at IS NULL').all(srcId);
     for (const f of files) {
       const newFileId = nanoid(21);
       try {
@@ -375,8 +394,46 @@ app.delete('/api/trash', (req, res) => {
     .all();
   let deleted = 0;
   for (const r of roots) deleted += permanentDelete(r.id);
+  const deletedFiles = db.prepare('SELECT id FROM files WHERE deleted_at IS NOT NULL').all();
+  for (const f of deletedFiles) purgeFile(f.id);
   notifyTree(req);
-  res.json({ ok: true, deleted });
+  res.json({ ok: true, deleted, files: deletedFiles.length });
+});
+
+// ---------- Papelera de adjuntos ----------
+
+function purgeFile(fileId) {
+  try {
+    fs.unlinkSync(path.join(FILES_DIR, fileId));
+  } catch {}
+  clearPreviews(fileId);
+  db.prepare('DELETE FROM files WHERE id = ?').run(fileId);
+}
+
+app.get('/api/trash/files', (req, res) => {
+  const rows = db
+    .prepare(
+      `SELECT f.id, f.name, f.mime, f.size, f.deleted_at, f.page_id, p.title AS page_title, p.icon AS page_icon
+       FROM files f LEFT JOIN pages p ON p.id = f.page_id
+       WHERE f.deleted_at IS NOT NULL ORDER BY f.deleted_at DESC`
+    )
+    .all();
+  res.json(rows);
+});
+
+app.post('/api/trash/files/:id/restore', (req, res) => {
+  const f = db.prepare('SELECT * FROM files WHERE id = ? AND deleted_at IS NOT NULL').get(req.params.id);
+  if (!f) return res.status(404).json({ error: 'No está en la papelera' });
+  db.prepare('UPDATE files SET deleted_at = NULL WHERE id = ?').run(f.id);
+  if (f.page_id) notifyPage(req, f.page_id);
+  res.json({ ok: true });
+});
+
+app.delete('/api/trash/files/:id', (req, res) => {
+  const f = db.prepare('SELECT * FROM files WHERE id = ? AND deleted_at IS NOT NULL').get(req.params.id);
+  if (!f) return res.status(404).json({ error: 'No está en la papelera' });
+  purgeFile(f.id);
+  res.json({ ok: true });
 });
 
 function purgeOldTrash() {
@@ -390,6 +447,12 @@ function purgeOldTrash() {
     .all(`-${TRASH_RETENTION_DAYS} days`);
   for (const r of roots) permanentDelete(r.id);
   if (roots.length) console.log(`Papelera: purgadas ${roots.length} páginas con más de ${TRASH_RETENTION_DAYS} días`);
+  const oldFiles = db
+    .prepare(`SELECT id FROM files WHERE deleted_at IS NOT NULL AND deleted_at < datetime('now', ?)`)
+    .all(`-${TRASH_RETENTION_DAYS} days`);
+  for (const f of oldFiles) purgeFile(f.id);
+  if (oldFiles.length) console.log(`Papelera: purgados ${oldFiles.length} adjuntos con más de ${TRASH_RETENTION_DAYS} días`);
+  purgeStaleUploads();
 }
 
 // ---------- Historial de versiones ----------
@@ -416,7 +479,7 @@ app.post('/api/pages/:id/restore-version/:vid', (req, res) => {
   snapshotVersion(page, { throttled: false });
   const text = extractText(v.content);
   db.prepare(
-    `UPDATE pages SET title = ?, content = ?, content_text = ?, updated_at = datetime('now') WHERE id = ?`
+    `UPDATE pages SET title = ?, content = ?, content_text = ?, rev = rev + 1, updated_at = datetime('now') WHERE id = ?`
   ).run(v.title, v.content, text, page.id);
   ftsUpsert(page.id, v.title, text);
   logActivity(page.id);
@@ -506,7 +569,7 @@ app.get('/api/pages/:id/markdown', async (req, res) => {
   if (!page) return res.status(404).json({ error: 'Página no encontrada' });
   const markdown = await docToMarkdown(page.content);
   const files = db
-    .prepare('SELECT id, name, mime, size FROM files WHERE page_id = ? ORDER BY created_at')
+    .prepare('SELECT id, name, mime, size FROM files WHERE page_id = ? AND deleted_at IS NULL ORDER BY created_at')
     .all(page.id);
   res.json({
     id: page.id,
@@ -532,7 +595,7 @@ app.post('/api/pages/:id/append', async (req, res) => {
   const current = await docToMarkdown(page.content);
   const combined = current ? `${current.replace(/\s+$/, '')}\n\n${markdown}` : markdown;
   db.prepare(
-    `UPDATE pages SET content = ?, content_text = ?, updated_at = datetime('now') WHERE id = ?`
+    `UPDATE pages SET content = ?, content_text = ?, rev = rev + 1, updated_at = datetime('now') WHERE id = ?`
   ).run(combined, combined, page.id);
   ftsUpsert(page.id, page.title, combined);
   logActivity(page.id);
@@ -542,27 +605,168 @@ app.post('/api/pages/:id/append', async (req, res) => {
 
 // ---------- Archivos ----------
 
+// Si el navegador no manda un tipo útil, lo deducimos de la extensión
+const EXT_MIME = {
+  '.webm': 'video/webm', '.mp4': 'video/mp4', '.mov': 'video/quicktime', '.mkv': 'video/x-matroska',
+  '.mp3': 'audio/mpeg', '.m4a': 'audio/mp4', '.ogg': 'audio/ogg', '.opus': 'audio/opus', '.wav': 'audio/wav',
+  '.pdf': 'application/pdf', '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg',
+  '.gif': 'image/gif', '.webp': 'image/webp', '.svg': 'image/svg+xml', '.txt': 'text/plain',
+  '.md': 'text/markdown', '.csv': 'text/csv', '.json': 'application/json', '.zip': 'application/zip',
+  '.docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  '.xlsx': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  '.pptx': 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+  '.doc': 'application/msword', '.xls': 'application/vnd.ms-excel', '.ppt': 'application/vnd.ms-powerpoint',
+};
+
+function inferMime(name, given) {
+  if (given && given !== 'application/octet-stream') return given;
+  return EXT_MIME[path.extname(name || '').toLowerCase()] || given || 'application/octet-stream';
+}
+
 app.post('/api/files', upload.single('file'), (req, res) => {
   if (!req.file) return res.status(400).json({ error: 'Falta el archivo' });
   const pageId = req.body.page_id || null;
   const f = req.file;
   // multer no decodifica UTF-8 en originalname (llega como latin1)
   const name = Buffer.from(f.originalname, 'latin1').toString('utf8');
+  const mime = inferMime(name, f.mimetype);
   db.prepare('INSERT INTO files (id, page_id, name, mime, size) VALUES (?, ?, ?, ?, ?)').run(
     f.filename,
     pageId,
     name,
-    f.mimetype,
+    mime,
     f.size
   );
   if (pageId) notifyPage(req, pageId);
   res.json({
     id: f.filename,
     name,
-    mime: f.mimetype,
+    mime,
     size: f.size,
     url: `/files/${f.filename}/${encodeURIComponent(name)}`,
   });
+});
+
+// ---------- Subida por trozos (reanudable) ----------
+// Cloudflare corta cualquier petición de más de 100 MB, así que el navegador
+// sube los archivos en trozos de 8 MB. Cada trozo se escribe en la posición
+// exacta (offset): si la red se cae, el cliente pregunta cuánto llegó y sigue
+// desde ahí sin repetir ni perder nada.
+
+const UPLOADS_DIR = path.join(DATA_DIR, 'uploads');
+fs.mkdirSync(UPLOADS_DIR, { recursive: true });
+const CHUNK_SIZE = 8 * 1024 * 1024;
+const UPLOAD_RETENTION_DAYS = 7;
+const uploadPartPath = (id) => path.join(UPLOADS_DIR, `${id}.part`);
+const isUploadId = (id) => /^[A-Za-z0-9_-]{21}$/.test(id);
+
+function partSize(id) {
+  try {
+    return fs.statSync(uploadPartPath(id)).size;
+  } catch {
+    return null;
+  }
+}
+
+function purgeStaleUploads() {
+  const stale = db
+    .prepare(`SELECT id FROM uploads WHERE created_at < datetime('now', ?)`)
+    .all(`-${UPLOAD_RETENTION_DAYS} days`);
+  for (const u of stale) {
+    try {
+      fs.unlinkSync(uploadPartPath(u.id));
+    } catch {}
+    db.prepare('DELETE FROM uploads WHERE id = ?').run(u.id);
+  }
+}
+
+app.post('/api/uploads', (req, res) => {
+  const { name, size, mime, page_id } = req.body || {};
+  if (typeof name !== 'string' || !name.trim()) return res.status(400).json({ error: 'Falta el nombre' });
+  if (!Number.isSafeInteger(size) || size < 0) return res.status(400).json({ error: 'Tamaño inválido' });
+  if (page_id && !db.prepare('SELECT id FROM pages WHERE id = ?').get(page_id)) {
+    return res.status(400).json({ error: 'Página inexistente' });
+  }
+  const id = nanoid(21);
+  fs.writeFileSync(uploadPartPath(id), '');
+  db.prepare('INSERT INTO uploads (id, page_id, name, mime, size) VALUES (?, ?, ?, ?, ?)').run(
+    id,
+    page_id || null,
+    name,
+    inferMime(name, mime),
+    size
+  );
+  res.json({ id, chunk_size: CHUNK_SIZE, received: 0 });
+});
+
+app.get('/api/uploads/:id', (req, res) => {
+  const u = isUploadId(req.params.id) && db.prepare('SELECT * FROM uploads WHERE id = ?').get(req.params.id);
+  const received = u ? partSize(u.id) : null;
+  if (!u || received === null) return res.status(404).json({ error: 'Subida no encontrada' });
+  res.json({ id: u.id, size: u.size, received });
+});
+
+app.put(
+  '/api/uploads/:id',
+  express.raw({ type: () => true, limit: CHUNK_SIZE * 2 }),
+  (req, res) => {
+    const u = isUploadId(req.params.id) && db.prepare('SELECT * FROM uploads WHERE id = ?').get(req.params.id);
+    const received = u ? partSize(u.id) : null;
+    if (!u || received === null) return res.status(404).json({ error: 'Subida no encontrada' });
+    const offset = Number(req.query.offset);
+    const chunk = Buffer.isBuffer(req.body) ? req.body : Buffer.alloc(0);
+    // El trozo no encaja donde estamos: el cliente se resincroniza con "received"
+    if (offset !== received) return res.status(409).json({ error: 'Offset desincronizado', received });
+    if (received + chunk.length > u.size) return res.status(400).json({ error: 'El trozo excede el tamaño declarado' });
+    const fd = fs.openSync(uploadPartPath(u.id), 'a');
+    try {
+      fs.writeSync(fd, chunk);
+      fs.fsyncSync(fd); // el trozo confirmado ya está en disco
+    } finally {
+      fs.closeSync(fd);
+    }
+    res.json({ received: received + chunk.length });
+  }
+);
+
+app.post('/api/uploads/:id/complete', (req, res) => {
+  const u = isUploadId(req.params.id) && db.prepare('SELECT * FROM uploads WHERE id = ?').get(req.params.id);
+  const received = u ? partSize(u.id) : null;
+  if (!u || received === null) return res.status(404).json({ error: 'Subida no encontrada' });
+  if (received !== u.size) return res.status(409).json({ error: 'Faltan datos por subir', received });
+  if (u.page_id && !db.prepare('SELECT id FROM pages WHERE id = ?').get(u.page_id)) {
+    return res.status(400).json({ error: 'La página ya no existe' });
+  }
+  const fileId = nanoid(21);
+  fs.renameSync(uploadPartPath(u.id), path.join(FILES_DIR, fileId)); // mismo disco: operación atómica
+  db.transaction(() => {
+    db.prepare('INSERT INTO files (id, page_id, name, mime, size) VALUES (?, ?, ?, ?, ?)').run(
+      fileId,
+      u.page_id,
+      u.name,
+      u.mime,
+      u.size
+    );
+    db.prepare('DELETE FROM uploads WHERE id = ?').run(u.id);
+  })();
+  if (u.page_id) notifyPage(req, u.page_id);
+  res.json({
+    id: fileId,
+    name: u.name,
+    mime: u.mime,
+    size: u.size,
+    url: `/files/${fileId}/${encodeURIComponent(u.name)}`,
+  });
+});
+
+app.delete('/api/uploads/:id', (req, res) => {
+  if (isUploadId(req.params.id)) {
+    try {
+      fs.unlinkSync(uploadPartPath(req.params.id));
+    } catch {}
+    db.prepare('DELETE FROM uploads WHERE id = ?').run(req.params.id);
+  }
+  res.json({ ok: true });
 });
 
 const INLINE_MIME = /^(image|video|audio|text)\/|^application\/pdf$/;
@@ -689,7 +893,7 @@ function convertToPdf(f) {
 }
 
 app.get('/files/:id/preview', async (req, res) => {
-  const f = db.prepare('SELECT * FROM files WHERE id = ?').get(req.params.id);
+  const f = db.prepare('SELECT * FROM files WHERE id = ? AND deleted_at IS NULL').get(req.params.id);
   if (!f) return res.status(404).json({ error: 'No encontrado' });
   if (!OFFICE_EXT.has(path.extname(f.name).toLowerCase())) {
     return res.status(400).json({ error: 'Este tipo de archivo no necesita conversión' });
@@ -715,7 +919,7 @@ app.get('/files/:id/preview', async (req, res) => {
 
 // Texto extraído de un PDF o documento de oficina (usado por el MCP read_attachment)
 app.get('/files/:id/text', async (req, res) => {
-  const f = db.prepare('SELECT * FROM files WHERE id = ?').get(req.params.id);
+  const f = db.prepare('SELECT * FROM files WHERE id = ? AND deleted_at IS NULL').get(req.params.id);
   if (!f) return res.status(404).json({ error: 'No encontrado' });
   if (!hasPoppler) {
     return res.status(501).json({ error: 'poppler no está instalado (apt install poppler-utils)' });
@@ -740,7 +944,7 @@ app.get('/files/:id/text', async (req, res) => {
 
 // Una página del documento renderizada a PNG (para PDFs escaneados o con diagramas)
 app.get('/files/:id/page/:page', async (req, res) => {
-  const f = db.prepare('SELECT * FROM files WHERE id = ?').get(req.params.id);
+  const f = db.prepare('SELECT * FROM files WHERE id = ? AND deleted_at IS NULL').get(req.params.id);
   if (!f) return res.status(404).json({ error: 'No encontrado' });
   if (!hasPoppler) return res.status(501).json({ error: 'poppler no está instalado (apt install poppler-utils)' });
   const page = parseInt(req.params.page, 10);
@@ -761,7 +965,7 @@ app.get('/files/:id/page/:page', async (req, res) => {
 });
 
 app.get('/files/:id/:name?', (req, res) => {
-  const f = db.prepare('SELECT * FROM files WHERE id = ?').get(req.params.id);
+  const f = db.prepare('SELECT * FROM files WHERE id = ? AND deleted_at IS NULL').get(req.params.id);
   if (!f) return res.status(404).send('No encontrado');
   const filePath = path.join(FILES_DIR, f.id);
   if (!fs.existsSync(filePath)) return res.status(404).send('No encontrado');
@@ -778,16 +982,14 @@ app.get('/files/:id/:name?', (req, res) => {
   }
 });
 
+// Borrar un adjunto lo manda a la papelera (recuperable 30 días); el archivo
+// sigue en disco hasta que se purga.
 app.delete('/api/files/:id', (req, res) => {
-  const f = db.prepare('SELECT * FROM files WHERE id = ?').get(req.params.id);
+  const f = db.prepare('SELECT * FROM files WHERE id = ? AND deleted_at IS NULL').get(req.params.id);
   if (!f) return res.status(404).json({ error: 'No encontrado' });
-  try {
-    fs.unlinkSync(path.join(FILES_DIR, f.id));
-  } catch {}
-  clearPreviews(f.id);
-  db.prepare('DELETE FROM files WHERE id = ?').run(f.id);
+  db.prepare(`UPDATE files SET deleted_at = datetime('now') WHERE id = ?`).run(f.id);
   if (f.page_id) notifyPage(req, f.page_id);
-  res.json({ ok: true });
+  res.json({ ok: true, trashed: true });
 });
 
 // ---------- Búsqueda ----------
@@ -840,7 +1042,7 @@ app.get('/api/share/:token', (req, res) => {
     .get(req.params.token);
   if (!page) return res.status(404).json({ error: 'Enlace no válido' });
   page.files = db
-    .prepare('SELECT id, name, mime, size FROM files WHERE page_id = ? ORDER BY created_at')
+    .prepare('SELECT id, name, mime, size FROM files WHERE page_id = ? AND deleted_at IS NULL ORDER BY created_at')
     .all(page.id);
   res.json(page);
 });
@@ -863,7 +1065,7 @@ app.get('/api/export', async (req, res) => {
     if (!childrenMap.has(key)) childrenMap.set(key, []);
     childrenMap.get(key).push(p);
   }
-  const allFiles = db.prepare('SELECT * FROM files').all();
+  const allFiles = db.prepare('SELECT * FROM files WHERE deleted_at IS NULL').all();
   const fileById = new Map(allFiles.map((f) => [f.id, f]));
   const fileEntryName = (f) => `files/${f.id}-${sanitizeName(f.name)}`;
 
@@ -945,8 +1147,69 @@ if (fs.existsSync(dist)) {
   });
 }
 
+// ---------- Copias de seguridad de la base de datos ----------
+// Cada hora (si hubo cambios) se hace una copia consistente de SQLite con la
+// API de backup (válida aunque haya escrituras en curso). Se guardan las
+// últimas 48 horarias + una diaria de los últimos 30 días. Los archivos
+// adjuntos no se modifican nunca (solo se añaden), así que basta con copiarlos.
+// El host Proxmox sincroniza esta carpeta y files/ fuera del disco (router).
+
+const DB_BACKUP_DIR = path.join(DATA_DIR, 'backups', 'db');
+fs.mkdirSync(DB_BACKUP_DIR, { recursive: true });
+const KEEP_HOURLY = 48;
+const KEEP_DAILY = 30;
+let lastBackupSignature = null;
+
+function dbSignature() {
+  const s = db
+    .prepare(
+      `SELECT (SELECT COUNT(*) || ':' || COALESCE(SUM(rev), 0) || ':' || COALESCE(MAX(updated_at), '') FROM pages) AS p,
+              (SELECT COUNT(*) || ':' || COALESCE(SUM(deleted_at IS NOT NULL), 0) FROM files) AS f,
+              (SELECT COALESCE(MAX(id), 0) FROM versions) AS v`
+    )
+    .get();
+  return `${s.p}|${s.f}|${s.v}`;
+}
+
+async function backupDatabase() {
+  const signature = dbSignature();
+  if (signature === lastBackupSignature) return; // nada nuevo desde la última copia
+  const stamp = new Date().toISOString().replace(/[:T]/g, '-').slice(0, 16); // 2026-10-20-07-28
+  const dest = path.join(DB_BACKUP_DIR, `nonotion-${stamp}.db`);
+  const tmp = `${dest}.tmp`;
+  try {
+    await db.backup(tmp);
+    fs.renameSync(tmp, dest);
+    lastBackupSignature = signature;
+  } catch (e) {
+    console.error('Copia de seguridad de la BD fallida:', e.message);
+    try {
+      fs.unlinkSync(tmp);
+    } catch {}
+    return;
+  }
+  const all = fs.readdirSync(DB_BACKUP_DIR).filter((f) => /^nonotion-[\d-]+\.db$/.test(f)).sort();
+  const keep = new Set(all.slice(-KEEP_HOURLY));
+  const firstOfDay = new Map();
+  for (const f of all) {
+    const day = f.slice(9, 19);
+    if (!firstOfDay.has(day)) firstOfDay.set(day, f);
+  }
+  for (const f of [...firstOfDay.values()].slice(-KEEP_DAILY)) keep.add(f);
+  for (const f of all) {
+    if (!keep.has(f)) {
+      try {
+        fs.unlinkSync(path.join(DB_BACKUP_DIR, f));
+      } catch {}
+    }
+  }
+}
+
 purgeOldTrash();
 setInterval(purgeOldTrash, 24 * 60 * 60 * 1000).unref();
+setInterval(purgeExpiredSessions, 6 * 60 * 60 * 1000).unref();
+setTimeout(backupDatabase, 60 * 1000).unref();
+setInterval(backupDatabase, 60 * 60 * 1000).unref();
 
 app.listen(PORT, () => {
   console.log(`NoNotion escuchando en http://localhost:${PORT}`);

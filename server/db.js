@@ -73,6 +73,42 @@ CREATE TABLE IF NOT EXISTS activity (
 CREATE INDEX IF NOT EXISTS idx_activity_day ON activity(day);
 `);
 
+// Revisión de la página: se incrementa en cada escritura y permite detectar
+// que otro dispositivo la cambió entre medias (control de concurrencia)
+if (!pageCols.includes('rev')) {
+  db.exec('ALTER TABLE pages ADD COLUMN rev INTEGER NOT NULL DEFAULT 0');
+}
+
+// Papelera de adjuntos: borrar un archivo lo marca, no lo elimina del disco
+const fileCols = db.prepare('PRAGMA table_info(files)').all().map((c) => c.name);
+if (!fileCols.includes('deleted_at')) {
+  db.exec('ALTER TABLE files ADD COLUMN deleted_at TEXT');
+}
+
+// Subidas por trozos en curso (reanudables)
+db.exec(`
+CREATE TABLE IF NOT EXISTS uploads (
+  id TEXT PRIMARY KEY,
+  page_id TEXT,
+  name TEXT NOT NULL,
+  mime TEXT,
+  size INTEGER NOT NULL,
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS sessions (
+  id TEXT PRIMARY KEY,
+  github_login TEXT NOT NULL,
+  github_id INTEGER,
+  name TEXT,
+  avatar_url TEXT,
+  user_agent TEXT,
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  last_seen_at TEXT NOT NULL DEFAULT (datetime('now')),
+  expires_at TEXT NOT NULL
+);
+`);
+
 // Backfill inicial: reconstruye actividad pasada desde el historial de
 // versiones y la última modificación de cada página
 if (!db.prepare('SELECT 1 FROM activity LIMIT 1').get()) {

@@ -1,10 +1,14 @@
 import { useEffect, useState } from 'react';
-import { api } from '../api.js';
+import { api, humanSize } from '../api.js';
 
 export default function TrashModal({ onClose, onChanged }) {
   const [items, setItems] = useState(null);
+  const [files, setFiles] = useState(null);
 
-  const refresh = () => api.trash().then(setItems);
+  const refresh = () => {
+    api.trash().then(setItems);
+    api.trashFiles().then(setFiles);
+  };
 
   useEffect(() => {
     refresh();
@@ -23,11 +27,24 @@ export default function TrashModal({ onClose, onChanged }) {
     refresh();
   };
 
+  const restoreFile = async (id) => {
+    await api.restoreTrashFile(id);
+    refresh();
+  };
+
+  const removeFileForever = async (f) => {
+    if (!confirm(`¿Eliminar definitivamente "${f.name}"? No se puede deshacer.`)) return;
+    await api.deleteTrashFile(f.id);
+    refresh();
+  };
+
   const empty = async () => {
-    if (!confirm('¿Vaciar toda la papelera? No se puede deshacer.')) return;
+    if (!confirm('¿Vaciar toda la papelera (páginas y archivos)? No se puede deshacer.')) return;
     await api.emptyTrash();
     refresh();
   };
+
+  const nothing = items?.length === 0 && files?.length === 0;
 
   return (
     <div className="modal-backdrop" onClick={onClose}>
@@ -35,7 +52,7 @@ export default function TrashModal({ onClose, onChanged }) {
         <div className="trash-header">
           <span>🗑 Papelera</span>
           <div>
-            {items?.length > 0 && (
+            {!nothing && items && files && (
               <button className="btn danger" onClick={empty}>
                 Vaciar papelera
               </button>
@@ -45,10 +62,11 @@ export default function TrashModal({ onClose, onChanged }) {
             </button>
           </div>
         </div>
-        <div className="trash-note">Las páginas se eliminan definitivamente tras 30 días en la papelera.</div>
+        <div className="trash-note">Las páginas y archivos se eliminan definitivamente tras 30 días en la papelera.</div>
         <div className="trash-list">
-          {items === null && <div className="history-empty">Cargando…</div>}
-          {items?.length === 0 && <div className="history-empty">La papelera está vacía.</div>}
+          {(items === null || files === null) && <div className="history-empty">Cargando…</div>}
+          {nothing && <div className="history-empty">La papelera está vacía.</div>}
+          {items?.length > 0 && <div className="trash-section">Páginas</div>}
           {items?.map((it) => (
             <div key={it.id} className="trash-item">
               <span className="trash-icon">{it.icon || '📄'}</span>
@@ -60,6 +78,26 @@ export default function TrashModal({ onClose, onChanged }) {
                 Restaurar
               </button>
               <button className="btn danger" onClick={() => removeForever(it.id)}>
+                Eliminar
+              </button>
+            </div>
+          ))}
+          {files?.length > 0 && <div className="trash-section">Archivos adjuntos</div>}
+          {files?.map((f) => (
+            <div key={f.id} className="trash-item">
+              <span className="trash-icon">📎</span>
+              <span className="trash-title">
+                {f.name}
+                <span className="trash-children">
+                  {' '}
+                  · {humanSize(f.size)}
+                  {f.page_title !== null && f.page_title !== undefined && ` · en ${f.page_icon || '📄'} ${f.page_title || 'Sin título'}`}
+                </span>
+              </span>
+              <button className="btn" onClick={() => restoreFile(f.id)}>
+                Restaurar
+              </button>
+              <button className="btn danger" onClick={() => removeFileForever(f)}>
                 Eliminar
               </button>
             </div>

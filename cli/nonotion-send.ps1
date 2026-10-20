@@ -7,6 +7,7 @@
 # Configuración (variables de entorno):
 #   NONOTION_URL              URL base, p. ej. https://notas.tudominio.com (obligatoria)
 #   NONOTION_PARENT           id de página padre opcional (por defecto: Inbox)
+#   NONOTION_TOKEN            token de API (cat /var/lib/nonotion/mcp_token); obligatorio con login GitHub
 #   CF_ACCESS_CLIENT_ID       service token de Cloudflare Access (opcional)
 #   CF_ACCESS_CLIENT_SECRET
 param([string]$Title = '')
@@ -33,6 +34,10 @@ if ($Title) { $payload.title = $Title }
 if ($env:NONOTION_PARENT) { $payload.parent_id = $env:NONOTION_PARENT }
 
 $headers = @{}
+if ($env:NONOTION_TOKEN) {
+  # Token de API (el mismo del conector MCP): necesario si el login con GitHub está activo
+  $headers['Authorization'] = "Bearer $($env:NONOTION_TOKEN)"
+}
 if ($env:CF_ACCESS_CLIENT_ID) {
   $headers['CF-Access-Client-Id'] = $env:CF_ACCESS_CLIENT_ID
   $headers['CF-Access-Client-Secret'] = $env:CF_ACCESS_CLIENT_SECRET

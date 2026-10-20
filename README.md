@@ -92,7 +92,7 @@ Y en el dashboard de Cloudflare (Zero Trust → Networks → Tunnels también va
 
 ## Zero Trust (Cloudflare Access)
 
-La app **no tiene login propio**: se apoya en que ya tienes Zero Trust por defecto delante del dominio. Asegúrate de tener una aplicación de Access cubriendo `notas.tudominio.com` con tu política habitual (por ejemplo, tu email de Google).
+La app puede apoyarse solo en Zero Trust delante del dominio, o además (o en su lugar) exigir **login con GitHub** (ver más abajo). Si usas Access, asegúrate de tener una aplicación cubriendo `notas.tudominio.com` con tu política habitual (por ejemplo, tu email de Google).
 
 La app leerá la cabecera `Cf-Access-Authenticated-User-Email` y mostrará tu usuario abajo a la izquierda.
 
@@ -192,7 +192,12 @@ En `skills/nonotion/SKILL.md` hay una skill lista para tu Claude: cópiala a `~/
 | GET | `/api/pages` | Árbol de páginas |
 | POST | `/api/pages` | Crear página (`parent_id` opcional) |
 | GET/PUT/DELETE | `/api/pages/:id` | Leer / actualizar / mover a papelera (recursivo) |
-| POST | `/api/files` | Subir archivo (multipart, `page_id`) |
+| POST | `/api/files` | Subir archivo (multipart, `page_id`; hasta 100 MB tras Cloudflare) |
+| POST | `/api/uploads` | Iniciar subida por trozos (`{name, size, mime, page_id}`) |
+| PUT | `/api/uploads/:id?offset=N` | Enviar un trozo en su posición (409 + `received` si hay desfase) |
+| GET | `/api/uploads/:id` | Cuánto ha llegado (para reanudar) |
+| POST | `/api/uploads/:id/complete` | Cerrar la subida y adjuntar el archivo |
+| GET/POST/DELETE | `/api/trash/files…` | Papelera de adjuntos: listar / restaurar / eliminar |
 | GET | `/files/:id/:nombre` | Descargar / ver archivo |
 | GET | `/files/:id/preview` | Documento de oficina convertido a PDF (LibreOffice, con caché) |
 | GET | `/api/search?q=` | Búsqueda full-text |
@@ -214,11 +219,76 @@ En `skills/nonotion/SKILL.md` hay una skill lista para tu Claude: cópiala a `~/
 
 Útil para automatizar: por ejemplo, un script en tu PC de IA puede crear páginas con respuestas de Claude vía `POST /api/pages` + `PUT` con el contenido (las llamadas dentro de la red de Zero Trust pueden usar un [service token de Access](https://developers.cloudflare.com/cloudflare-one/identity/service-tokens/)).
 
-## Copias de seguridad
+## Copias de seguridad y protección contra pérdidas
 
 Todo el estado está en `DATA_DIR` (por defecto `/var/lib/nonotion`):
 
 - `nonotion.db` — páginas y metadatos (SQLite, modo WAL)
-- `files/` — archivos subidos
+- `files/` — archivos subidos (nunca se modifican, solo se añaden)
+- `backups/db/` — instantáneas de la BD hechas por la propia app
+- `backups/pre-update/` — copia de la BD justo antes de cada actualización con `install.sh`
 
-Un snapshot del LXC desde Proxmox, o un `rsync` de esa carpeta, es un backup completo.
+### Capas de protección
+
+| Riesgo | Protección |
+| --- | --- |
+| Se cae la red mientras escribes | El autoguardado reintenta solo (2 s, 4 s, 8 s… hasta 30 s) y vuelve a intentarlo al recuperar la conexión |
+| Cierras la pestaña, se cuelga el navegador o caduca la sesión | Todo cambio no confirmado vive también en el navegador (`localStorage`); al volver a abrir la página se ofrece **Recuperar** |
+| Cerrar con cambios pendientes o subidas en curso | El navegador avisa antes de cerrar |
+| Dos dispositivos (o Claude) editan la misma página | Si guardas sobre una versión que otro cambió, la suya se guarda en el historial antes (control por revisión): nunca se pisa sin copia |
+| Escrituras de Claude/MCP o scripts | Siempre dejan versión previa en el historial |
+| Borrar un adjunto por error | Va a la papelera 30 días (🗑 Papelera → Archivos adjuntos) |
+| Corrupción o error grave | Instantánea consistente de la BD cada hora con cambios (48 horarias + 30 diarias) |
+| Fallo del disco del servidor | El host Proxmox copia cada hora `files/` y las instantáneas a otro dispositivo (`deploy/proxmox-offsite-backup.sh`) |
+
+Además, `vzdump` de Proxmox sigue haciendo la copia completa del contenedor.
+
+### Restaurar la base de datos
+
+```bash
+systemctl stop nonotion
+cp /var/lib/nonotion/nonotion.db /root/nonotion-antes-de-restaurar.db   # por si acaso
+rm -f /var/lib/nonotion/nonotion.db-wal /var/lib/nonotion/nonotion.db-shm
+cp /var/lib/nonotion/backups/db/nonotion-AAAA-MM-DD-HH-MM.db /var/lib/nonotion/nonotion.db
+chown nonotion:nonotion /var/lib/nonotion/nonotion.db
+systemctl start nonotion
+```
+
+Si el disco entero se perdiera: la copia externa (`nonotion/db/` y `nonotion/files/` en el router) contiene todo lo necesario; se reinstala NoNotion, se copian `files/` a `/var/lib/nonotion/files/` y la instantánea más reciente como `nonotion.db`.
+
+## Subida de archivos grandes
+
+Cloudflare rechaza cualquier petición de más de **100 MB**. La app sube por eso los archivos en trozos de 8 MB, cada uno escrito en su posición exacta y confirmado en disco: si la conexión falla, se pregunta al servidor cuánto llegó y se continúa desde ahí, sin repetir ni corromper nada. No hay límite de tamaño más allá del disco. Funciona igual al pegar o arrastrar archivos dentro del editor.
+
+## Login con GitHub
+
+Además (o en lugar) de Cloudflare Access, NoNotion puede exigir login con GitHub y dejar entrar solo a los usuarios que indiques.
+
+1. Crea una OAuth App en <https://github.com/settings/applications/new>:
+   - **Application name**: NoNotion
+   - **Homepage URL**: `https://notas.tudominio.com`
+   - **Authorization callback URL**: `https://notas.tudominio.com/auth/github/callback`
+2. Genera un *client secret* y rellena `/etc/nonotion.env` en el servidor (plantilla en `deploy/nonotion.env.example`):
+
+   ```bash
+   PUBLIC_URL=https://notas.tudominio.com
+   GITHUB_CLIENT_ID=Ov23li...
+   GITHUB_CLIENT_SECRET=...
+   AUTH_ALLOWED_GITHUB_USERS=tu-usuario
+   ```
+
+3. `systemctl restart nonotion`. En el log verás `Login con GitHub activo`.
+
+Cómo funciona:
+
+- Sesiones de 30 días (se renuevan al usarla), guardadas en SQLite solo como hash; cookie `HttpOnly`, `Secure`, `SameSite=Lax`. Botón **Salir** abajo a la izquierda.
+- Solo se pide el permiso `read:user` (saber quién eres). El token de GitHub no se guarda.
+- Quitar a alguien de `AUTH_ALLOWED_GITHUB_USERS` y reiniciar le corta el acceso aunque tenga sesión.
+- Si la configuración queda a medias, la app **se bloquea** (falla cerrada), nunca queda abierta.
+- Las escrituras con sesión deben venir de tu propio dominio (protección CSRF).
+- Siguen públicos: el conector MCP (`/mcp/<token>`), los enlaces de compartir y los adjuntos de páginas compartidas.
+- Los scripts (`nonotion-send`) usan el token de API: `export NONOTION_TOKEN=$(cat /var/lib/nonotion/mcp_token)`.
+
+Con el login de GitHub activo puedes **quitar Cloudflare Access** del dominio principal (y las reglas Bypass de `/share/*`, `/files/*`, `/assets/*` y `/mcp/*`): la app ya protege cada ruta. O mantener ambos como doble capa.
+
+## API

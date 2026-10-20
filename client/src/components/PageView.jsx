@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useParams, Link } from 'react-router-dom';
-import { api, parseContent } from '../api.js';
+import { api, parseContent, markBusy, clearBusy } from '../api.js';
 import Editor from './Editor.jsx';
 import Attachments from './Attachments.jsx';
 import EmojiPicker from './EmojiPicker.jsx';
@@ -17,11 +17,44 @@ function breadcrumb(pages, id) {
   return chain;
 }
 
+// ---------- Borrador local ----------
+// Todo cambio no confirmado por el servidor se guarda también en el navegador.
+// Si se cae la red, se cierra la pestaña o caduca la sesión, al volver a abrir
+// la página se ofrece recuperarlo.
+const draftKey = (pid) => `nn:draft:${pid}`;
+function readDraft(pid) {
+  try {
+    return JSON.parse(localStorage.getItem(draftKey(pid)) || 'null');
+  } catch {
+    return null;
+  }
+}
+function writeDraft(pid, fields, baseRev) {
+  try {
+    localStorage.setItem(draftKey(pid), JSON.stringify({ fields, base_rev: baseRev, ts: Date.now() }));
+  } catch {}
+}
+function removeDraft(pid) {
+  try {
+    localStorage.removeItem(draftKey(pid));
+  } catch {}
+}
+
+// ¿El borrador contiene algo distinto de lo que hay en el servidor?
+function draftDiffers(draft, page) {
+  const f = draft?.fields || {};
+  if (f.content !== undefined && JSON.stringify(f.content) !== page.content) return true;
+  if (f.title !== undefined && f.title !== page.title) return true;
+  if (f.icon !== undefined && f.icon !== page.icon) return true;
+  if (f.page_date !== undefined && (f.page_date || null) !== (page.page_date || null)) return true;
+  return false;
+}
+
 export default function PageView({ pages, pageEvent, onTreeChange, onDelete, onCreateChild, onDuplicate }) {
   const { id } = useParams();
   const [page, setPage] = useState(null);
   const [files, setFiles] = useState([]);
-  const [status, setStatus] = useState('saved'); // saved | saving | error
+  const [status, setStatus] = useState('saved'); // saved | saving | retrying | error
   const [emojiOpen, setEmojiOpen] = useState(false);
   const [shareOpen, setShareOpen] = useState(false);
   const [historyOpen, setHistoryOpen] = useState(false);
@@ -29,24 +62,111 @@ export default function PageView({ pages, pageEvent, onTreeChange, onDelete, onC
   const [copied, setCopied] = useState(false);
   const [reloadKey, setReloadKey] = useState(0);
   const [remoteChange, setRemoteChange] = useState(false); // aviso de cambio remoto mientras editas
+  const [conflictSaved, setConflictSaved] = useState(false); // la versión ajena quedó en el historial
+  const [draftOffer, setDraftOffer] = useState(null); // borrador local pendiente de recuperar
   const editorRef = useRef(null);
   const focusedRef = useRef(false);
   const saveTimer = useRef(null);
   const liveTimer = useRef(null);
-  const pending = useRef({});
+  const pending = useRef({}); // cambios aún no enviados
+  const unconfirmed = useRef({}); // cambios aún no confirmados por el servidor (= borrador)
+  const draftBaseRev = useRef(null); // revisión sobre la que se empezó el borrador
+  const revRef = useRef(0); // última revisión del servidor conocida por esta pestaña
+  const inFlight = useRef(false);
+  const again = useRef(false);
+  const retries = useRef(0);
+  const gen = useRef(0); // cambia al cambiar de página: invalida guardados en vuelo
+
+  const persistDraft = useCallback((pid) => {
+    if (Object.keys(unconfirmed.current).length) {
+      writeDraft(pid, unconfirmed.current, draftBaseRev.current);
+      markBusy(`page:${pid}`);
+    } else {
+      removeDraft(pid);
+      clearBusy(`page:${pid}`);
+      draftBaseRev.current = null;
+    }
+  }, []);
 
   const loadPage = useCallback(() => {
     return api.page(id).then((p) => {
+      revRef.current = p.rev ?? 0;
       setPage(p);
       setFiles(p.files || []);
       setShareToken(p.share_token);
+      const draft = readDraft(id);
+      if (draft && draftDiffers(draft, p)) setDraftOffer(draft);
+      else if (draft) removeDraft(id);
     });
   }, [id]);
 
-  // Recarga el contenido desde el servidor y remonta el editor
+  const flush = useCallback(async () => {
+    if (inFlight.current) {
+      again.current = true; // al terminar el guardado en curso se vuelve a lanzar
+      return;
+    }
+    const data = pending.current;
+    if (Object.keys(data).length === 0) return;
+    pending.current = {};
+    inFlight.current = true;
+    const myGen = gen.current;
+    setStatus('saving');
+    try {
+      const res = await api.updatePage(id, { ...data, base_rev: revRef.current });
+      if (myGen !== gen.current) return; // ya estamos en otra página
+      revRef.current = res.rev;
+      if (res.conflict) setConflictSaved(true);
+      // Solo se confirma lo enviado; lo tecleado mientras tanto sigue pendiente
+      for (const k of Object.keys(data)) {
+        if (unconfirmed.current[k] === data[k]) delete unconfirmed.current[k];
+      }
+      persistDraft(id);
+      retries.current = 0;
+      setStatus(Object.keys(pending.current).length ? 'saving' : 'saved');
+      if (data.title !== undefined || data.icon !== undefined) onTreeChange();
+    } catch (e) {
+      if (myGen !== gen.current) return;
+      pending.current = { ...data, ...pending.current }; // se devuelve a la cola sin pisar lo nuevo
+      if (e.status === 404) {
+        setStatus('error'); // la página ya no existe; el borrador queda en el navegador
+        return;
+      }
+      if (e.status === 401) return; // redirigiendo al login; el borrador sobrevive
+      retries.current += 1;
+      setStatus('retrying');
+      clearTimeout(saveTimer.current);
+      saveTimer.current = setTimeout(flush, Math.min(30000, 1000 * 2 ** retries.current));
+    } finally {
+      if (myGen === gen.current) {
+        inFlight.current = false;
+        if ((again.current || Object.keys(pending.current).length) && retries.current === 0) {
+          again.current = false;
+          clearTimeout(saveTimer.current);
+          saveTimer.current = setTimeout(flush, 0);
+        }
+      }
+    }
+  }, [id, onTreeChange, persistDraft]);
+
+  const queueSave = useCallback(
+    (data) => {
+      if (!Object.keys(unconfirmed.current).length) draftBaseRev.current = revRef.current;
+      pending.current = { ...pending.current, ...data };
+      unconfirmed.current = { ...unconfirmed.current, ...data };
+      persistDraft(id);
+      if (retries.current === 0) setStatus('saving');
+      clearTimeout(saveTimer.current);
+      saveTimer.current = setTimeout(flush, 700);
+    },
+    [flush, id, persistDraft]
+  );
+
+  // Recarga el contenido desde el servidor y remonta el editor. Si había
+  // cambios sin guardar, quedan en el borrador local y se ofrecen al cargar.
   const reloadContent = useCallback(async () => {
     clearTimeout(saveTimer.current);
     pending.current = {};
+    unconfirmed.current = {};
     await loadPage();
     setReloadKey((k) => k + 1);
     setRemoteChange(false);
@@ -54,22 +174,70 @@ export default function PageView({ pages, pageEvent, onTreeChange, onDelete, onC
   }, [loadPage]);
 
   useEffect(() => {
+    gen.current += 1;
     setPage(null);
     setShareOpen(false);
     setEmojiOpen(false);
     setHistoryOpen(false);
     setRemoteChange(false);
+    setConflictSaved(false);
+    setDraftOffer(null);
+    setStatus('saved');
+    inFlight.current = false;
+    again.current = false;
+    retries.current = 0;
     loadPage();
+    const pid = id;
     return () => {
       clearTimeout(saveTimer.current);
       clearTimeout(liveTimer.current);
+      // Al salir de la página se envía lo que quedara pendiente, sin esperar.
+      // Si falla, el borrador local de esta página lo conserva.
+      const leftover = { ...unconfirmed.current };
+      if (Object.keys(leftover).length) {
+        api
+          .updatePage(pid, { ...leftover, base_rev: revRef.current })
+          .then(() => {
+            removeDraft(pid);
+            clearBusy(`page:${pid}`);
+          })
+          .catch(() => {});
+      }
+      pending.current = {};
+      unconfirmed.current = {};
+      draftBaseRev.current = null;
     };
-  }, [loadPage]);
+  }, [id, loadPage]);
+
+  // Si la pestaña pasa a segundo plano (cambio de app, bloqueo del móvil),
+  // se guarda ya en vez de esperar al temporizador
+  useEffect(() => {
+    const onHide = () => {
+      if (document.visibilityState === 'hidden' && Object.keys(pending.current).length) {
+        clearTimeout(saveTimer.current);
+        flush();
+      }
+    };
+    const onOnline = () => {
+      if (Object.keys(pending.current).length) {
+        retries.current = 0;
+        clearTimeout(saveTimer.current);
+        flush();
+      }
+    };
+    document.addEventListener('visibilitychange', onHide);
+    window.addEventListener('online', onOnline);
+    return () => {
+      document.removeEventListener('visibilitychange', onHide);
+      window.removeEventListener('online', onOnline);
+    };
+  }, [flush]);
 
   // Sincronización en vivo: alguien (o el MCP) cambió esta página
   useEffect(() => {
     if (!pageEvent || pageEvent.id !== id) return;
-    const busy = () => focusedRef.current || status === 'saving' || Object.keys(pending.current).length > 0;
+    const busy = () =>
+      focusedRef.current || inFlight.current || Object.keys(unconfirmed.current).length > 0;
     if (busy()) {
       setRemoteChange(true); // estás escribiendo: no te pisamos, te avisamos
     } else {
@@ -81,29 +249,29 @@ export default function PageView({ pages, pageEvent, onTreeChange, onDelete, onC
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pageEvent]);
 
-  const flush = useCallback(async () => {
-    const data = pending.current;
-    pending.current = {};
-    if (Object.keys(data).length === 0) return;
-    setStatus('saving');
-    try {
-      await api.updatePage(id, data);
-      setStatus('saved');
-      if (data.title !== undefined || data.icon !== undefined) onTreeChange();
-    } catch {
-      setStatus('error');
-    }
-  }, [id, onTreeChange]);
+  const restoreDraft = () => {
+    const d = draftOffer;
+    setDraftOffer(null);
+    const f = d.fields || {};
+    setPage((p) => ({
+      ...p,
+      ...(f.title !== undefined ? { title: f.title } : {}),
+      ...(f.icon !== undefined ? { icon: f.icon } : {}),
+      ...(f.page_date !== undefined ? { page_date: f.page_date } : {}),
+      ...(f.content !== undefined ? { content: JSON.stringify(f.content) } : {}),
+    }));
+    setReloadKey((k) => k + 1);
+    // Base del borrador: si la página cambió desde entonces, el servidor guarda
+    // antes la versión actual en el historial (nada se pisa sin copia)
+    revRef.current = typeof d.base_rev === 'number' ? d.base_rev : revRef.current;
+    queueSave(f);
+  };
 
-  const queueSave = useCallback(
-    (data) => {
-      pending.current = { ...pending.current, ...data };
-      setStatus('saving');
-      clearTimeout(saveTimer.current);
-      saveTimer.current = setTimeout(flush, 700);
-    },
-    [flush]
-  );
+  const discardDraft = () => {
+    removeDraft(id);
+    clearBusy(`page:${id}`);
+    setDraftOffer(null);
+  };
 
   if (!page) return <div className="page-loading">Cargando…</div>;
 
@@ -146,6 +314,40 @@ export default function PageView({ pages, pageEvent, onTreeChange, onDelete, onC
 
   return (
     <div className="page">
+      {draftOffer && (
+        <div className="remote-banner draft-banner">
+          <span>
+            💾 Hay cambios de esta página que no llegaron a guardarse (
+            {new Date(draftOffer.ts).toLocaleString()}). ¿Los recuperas?
+          </span>
+          <button className="btn primary" onClick={restoreDraft}>
+            Recuperar
+          </button>
+          <button className="btn" onClick={discardDraft}>
+            Descartar
+          </button>
+        </div>
+      )}
+      {conflictSaved && (
+        <div className="remote-banner">
+          <span>
+            🛟 Otro dispositivo (o Claude) había cambiado esta página. Su versión se ha guardado en el historial antes
+            de guardar la tuya: no se ha perdido nada.
+          </span>
+          <button
+            className="btn"
+            onClick={() => {
+              setConflictSaved(false);
+              setHistoryOpen(true);
+            }}
+          >
+            Ver historial
+          </button>
+          <button className="btn" onClick={() => setConflictSaved(false)}>
+            Entendido
+          </button>
+        </div>
+      )}
       {remoteChange && (
         <div className="remote-banner">
           <span>🔄 Esta página ha cambiado en otro sitio mientras editabas.</span>
@@ -171,7 +373,13 @@ export default function PageView({ pages, pageEvent, onTreeChange, onDelete, onC
         </nav>
         <div className="topbar-actions">
           <span className={`save-status ${status}`}>
-            {status === 'saving' ? 'Guardando…' : status === 'error' ? '⚠ Error al guardar' : 'Guardado'}
+            {status === 'saving'
+              ? 'Guardando…'
+              : status === 'retrying'
+                ? '⚠ Sin conexión: reintentando (guardado en este navegador)'
+                : status === 'error'
+                  ? '⚠ No se pudo guardar (copia en este navegador)'
+                  : 'Guardado'}
           </span>
           <input
             type="date"
@@ -207,8 +415,7 @@ export default function PageView({ pages, pageEvent, onTreeChange, onDelete, onC
                       {copied ? '✓ Copiado' : 'Copiar enlace'}
                     </button>
                     <p className="share-note">
-                      Requiere una regla de bypass en Cloudflare Access para <code>/share/*</code> y{' '}
-                      <code>/files/*</code> (ver README).
+                      Cualquiera con el enlace podrá ver esta página y sus adjuntos en solo lectura.
                     </p>
                   </>
                 ) : (

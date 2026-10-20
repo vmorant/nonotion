@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { NavLink, useNavigate } from 'react-router-dom';
+import { api } from '../api.js';
 
 function TreeItem({ page, index, childrenMap, depth, onCreate, onDelete, onDuplicate, onMove }) {
   const [open, setOpen] = useState(depth < 1);
@@ -205,7 +206,30 @@ export default function Sidebar({ pages, me, onCreate, onDelete, onDuplicate, on
         </button>
       </div>
       <div className="sidebar-footer">
-        {me?.email ? <span title="Sesión de Cloudflare Access">👤 {me.email}</span> : <span>Acceso local</span>}
+        {me?.user ? (
+          <div className="sidebar-user">
+            {me.user.avatar_url && <img src={me.user.avatar_url} alt="" className="sidebar-avatar" />}
+            <span className="sidebar-login" title="Sesión iniciada con GitHub">
+              {me.user.login}
+            </span>
+            <button
+              className="icon-btn"
+              title="Cerrar sesión"
+              onClick={async () => {
+                try {
+                  await api.logout();
+                } catch {}
+                window.location.href = '/login';
+              }}
+            >
+              Salir
+            </button>
+          </div>
+        ) : me?.email ? (
+          <span title="Sesión de Cloudflare Access">👤 {me.email}</span>
+        ) : (
+          <span>Acceso local</span>
+        )}
       </div>
     </aside>
   );

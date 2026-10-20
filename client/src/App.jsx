@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import { Routes, Route, useNavigate, useLocation } from 'react-router-dom';
-import { api, CLIENT_ID } from './api.js';
+import { api, CLIENT_ID, hasUnsavedWork } from './api.js';
 import Sidebar from './components/Sidebar.jsx';
 import PageView from './components/PageView.jsx';
 import SearchModal from './components/SearchModal.jsx';
@@ -25,6 +25,18 @@ export default function App() {
     refreshTree();
     api.me().then(setMe).catch(() => {});
   }, [refreshTree]);
+
+  // Si hay cambios sin confirmar o subidas en curso, el navegador avisa antes
+  // de cerrar o recargar la pestaña
+  useEffect(() => {
+    const onBeforeUnload = (e) => {
+      if (!hasUnsavedWork()) return;
+      e.preventDefault();
+      e.returnValue = '';
+    };
+    window.addEventListener('beforeunload', onBeforeUnload);
+    return () => window.removeEventListener('beforeunload', onBeforeUnload);
+  }, []);
 
   // Sincronización en vivo: el servidor avisa cuando cambia algo (otra persona o el MCP)
   useEffect(() => {
