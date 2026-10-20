@@ -1,6 +1,11 @@
-// Conversión de contenido Tiptap (JSON) a Markdown en el servidor, usando
-// el mismo stack del cliente en modo headless (jsdom). Inicialización perezosa:
-// solo paga el coste el primer export.
+// Conversión entre contenido Tiptap (JSON) y Markdown en el servidor, usando
+// el mismo stack del cliente en modo headless (jsdom). Inicialización perezosa.
+//
+// Regla para no perder nada: el Markdown sirve para LEER (Claude, export) y
+// para ESCRIBIR fragmentos nuevos. Nunca se reescribe una página entera a
+// partir de su propio Markdown: añadir y editar trabajan sobre el documento y
+// solo tocan los bloques afectados.
+import { withMarkdownTables, splitCellBreaks } from '../client/src/tableMarkdown.js';
 
 let editorPromise = null;
 
@@ -45,7 +50,7 @@ async function createEditor() {
       Image,
       TaskList,
       TaskItem.configure({ nested: true }),
-      Table,
+      withMarkdownTables(Table),
       TableRow,
       TableHeader,
       TableCell,
@@ -55,10 +60,17 @@ async function createEditor() {
   });
 }
 
+async function getEditor() {
+  if (!editorPromise) editorPromise = createEditor();
+  return editorPromise;
+}
+
+const isRawMarkdown = (content) => typeof content === 'string' && !content.trim().startsWith('{');
+
 export async function docToMarkdown(content) {
   if (!content) return '';
-  // Las páginas capturadas vía API guardan markdown crudo: va tal cual.
-  if (typeof content === 'string' && !content.trim().startsWith('{')) return content;
+  // Las páginas capturadas antiguas guardan markdown crudo: va tal cual.
+  if (isRawMarkdown(content)) return content;
   let doc = content;
   if (typeof doc === 'string') {
     try {
@@ -67,8 +79,83 @@ export async function docToMarkdown(content) {
       return content;
     }
   }
-  if (!editorPromise) editorPromise = createEditor();
-  const editor = await editorPromise;
+  const editor = await getEditor();
   editor.commands.setContent(doc);
   return editor.storage.markdown.getMarkdown();
+}
+
+// Markdown -> documento Tiptap (JSON), igual que lo haría el editor web
+export async function markdownToDoc(markdown) {
+  const editor = await getEditor();
+  editor.commands.setContent(markdown || '');
+  return splitCellBreaks(editor.getJSON());
+}
+
+// Contenido almacenado (JSON o markdown crudo) -> documento Tiptap
+export async function toDoc(content) {
+  if (!content) return { type: 'doc', content: [] };
+  if (isRawMarkdown(content)) return markdownToDoc(content);
+  try {
+    const doc = typeof content === 'string' ? JSON.parse(content) : content;
+    return { type: 'doc', content: [], ...doc };
+  } catch {
+    return markdownToDoc(String(content));
+  }
+}
+
+const isEmptyParagraph = (n) => n && n.type === 'paragraph' && !(n.content && n.content.length);
+
+// Añade Markdown al final sin tocar lo que ya hay (las tablas complejas,
+// imágenes, etc. de la página quedan exactamente como estaban)
+export async function appendMarkdown(content, markdown) {
+  const doc = await toDoc(content);
+  const extra = (await markdownToDoc(markdown)).content || [];
+  const current = [...(doc.content || [])];
+  while (current.length && isEmptyParagraph(current[current.length - 1])) current.pop();
+  return { ...doc, content: [...current, ...extra] };
+}
+
+export class EditError extends Error {
+  constructor(message, code) {
+    super(message);
+    this.code = code;
+  }
+}
+
+// Sustituye un fragmento exacto del Markdown de la página. Solo se vuelven a
+// generar los bloques que contienen el fragmento; el resto del documento no
+// pasa por Markdown y queda intacto.
+export async function replaceInDoc(content, find, replace) {
+  if (!find) throw new EditError('find_text está vacío', 'empty');
+  const doc = await toDoc(content);
+  const blocks = doc.content || [];
+  const editor = await getEditor();
+  const pieces = blocks.map((b) => {
+    editor.commands.setContent({ type: 'doc', content: [b] });
+    return editor.storage.markdown.getMarkdown();
+  });
+  const SEP = '\n\n';
+  const full = pieces.join(SEP);
+  const at = full.indexOf(find);
+  if (at < 0) throw new EditError('find_text no aparece en la página', 'not_found');
+  if (full.indexOf(find, at + 1) >= 0) throw new EditError('find_text aparece más de una vez', 'ambiguous');
+  const end = at + find.length;
+  // Bloques que solapan con el fragmento
+  let pos = 0;
+  let first = -1;
+  let last = -1;
+  pieces.forEach((piece, i) => {
+    const s = pos;
+    const e = pos + piece.length;
+    if (first < 0 && end > s && at < e + SEP.length) first = i;
+    if (at < e && end > s) last = i;
+    pos = e + SEP.length;
+  });
+  if (first < 0) first = 0;
+  if (last < first) last = first;
+  const offset = pieces.slice(0, first).reduce((n, p) => n + p.length + SEP.length, 0);
+  const segment = pieces.slice(first, last + 1).join(SEP);
+  const edited = segment.slice(0, at - offset) + replace + segment.slice(end - offset);
+  const newBlocks = edited.trim() ? (await markdownToDoc(edited)).content || [] : [];
+  return { ...doc, content: [...blocks.slice(0, first), ...newBlocks, ...blocks.slice(last + 1)] };
 }

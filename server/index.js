@@ -7,7 +7,7 @@ import { nanoid } from 'nanoid';
 import { fileURLToPath } from 'url';
 import { spawnSync, execFile } from 'child_process';
 import db, { DATA_DIR, FILES_DIR, ftsUpsert, ftsDelete, extractText, logActivity } from './db.js';
-import { docToMarkdown } from './markdown.js';
+import { docToMarkdown, markdownToDoc, appendMarkdown, replaceInDoc, EditError } from './markdown.js';
 import { mountMcp, getOrCreateToken } from './mcp.js';
 import { setupAuth, purgeExpiredSessions } from './auth.js';
 
@@ -16,6 +16,9 @@ const PORT = process.env.PORT || 3000;
 const TRASH_RETENTION_DAYS = 30;
 const VERSION_THROTTLE_MINUTES = 10;
 const MAX_VERSIONS_PER_PAGE = 50;
+
+// Un error inesperado en una petición no debe tumbar el servicio entero
+process.on('unhandledRejection', (e) => console.error('Error no capturado:', e));
 
 const app = express();
 app.disable('x-powered-by');
@@ -537,7 +540,7 @@ function getOrCreateInbox() {
   return id;
 }
 
-app.post('/api/capture', (req, res) => {
+app.post('/api/capture', async (req, res) => {
   const { markdown, title, parent_id, page_date, icon } = req.body || {};
   if (typeof markdown !== 'string' || !markdown.trim()) {
     return res.status(400).json({ error: 'Falta el campo "markdown"' });
@@ -548,16 +551,26 @@ app.post('/api/capture', (req, res) => {
   }
   if (!parentId) parentId = getOrCreateInbox();
 
+  // Se guarda ya como documento (igual que si se hubiera pegado en el editor)
+  let content = markdown;
+  let text = markdown;
+  try {
+    const doc = await markdownToDoc(markdown);
+    content = JSON.stringify(doc);
+    text = extractText(doc);
+  } catch (e) {
+    console.error('Captura: no se pudo convertir el Markdown, se guarda tal cual:', e.message);
+  }
+
   const id = nanoid(12);
   const pageTitle = (title || '').trim() || deriveTitle(markdown);
   const pos = db
     .prepare('SELECT COALESCE(MAX(position) + 1, 0) AS p FROM pages WHERE parent_id IS ?')
     .get(parentId).p;
-  // Se guarda el markdown crudo: el editor lo convierte a bloques al abrirlo
   db.prepare(
     'INSERT INTO pages (id, parent_id, title, icon, content, content_text, position, page_date) VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
-  ).run(id, parentId, pageTitle, typeof icon === 'string' && icon ? icon : '🤖', markdown, markdown, pos, validDate(page_date));
-  ftsUpsert(id, pageTitle, markdown);
+  ).run(id, parentId, pageTitle, typeof icon === 'string' && icon ? icon : '🤖', content, text, pos, validDate(page_date));
+  ftsUpsert(id, pageTitle, text);
   notifyTree(req);
   res.json({ id, title: pageTitle, url: `/p/${id}` });
 });
@@ -584,6 +597,22 @@ app.get('/api/pages/:id/markdown', async (req, res) => {
   });
 });
 
+// Guarda un documento nuevo con versión previa garantizada (escrituras de
+// Claude/MCP y scripts: siempre recuperables desde el historial)
+function saveDocWithVersion(req, page, doc) {
+  snapshotVersion(page, { throttled: Boolean(req.headers['x-client-id']) });
+  const content = JSON.stringify(doc);
+  const text = extractText(doc);
+  db.prepare(
+    `UPDATE pages SET content = ?, content_text = ?, rev = rev + 1, updated_at = datetime('now') WHERE id = ?`
+  ).run(content, text, page.id);
+  ftsUpsert(page.id, page.title, text);
+  logActivity(page.id);
+  notifyPage(req, page.id);
+  return db.prepare('SELECT * FROM pages WHERE id = ?').get(page.id);
+}
+
+// Añade Markdown al final sin reescribir lo existente
 app.post('/api/pages/:id/append', async (req, res) => {
   const page = db.prepare('SELECT * FROM pages WHERE id = ?').get(req.params.id);
   if (!page) return res.status(404).json({ error: 'Página no encontrada' });
@@ -591,16 +620,31 @@ app.post('/api/pages/:id/append', async (req, res) => {
   if (typeof markdown !== 'string' || !markdown.trim()) {
     return res.status(400).json({ error: 'Falta el campo "markdown"' });
   }
-  if (page.content) snapshotVersion(page, { throttled: true });
-  const current = await docToMarkdown(page.content);
-  const combined = current ? `${current.replace(/\s+$/, '')}\n\n${markdown}` : markdown;
-  db.prepare(
-    `UPDATE pages SET content = ?, content_text = ?, rev = rev + 1, updated_at = datetime('now') WHERE id = ?`
-  ).run(combined, combined, page.id);
-  ftsUpsert(page.id, page.title, combined);
-  logActivity(page.id);
-  notifyPage(req, page.id);
-  res.json(db.prepare('SELECT * FROM pages WHERE id = ?').get(page.id));
+  try {
+    const doc = await appendMarkdown(page.content, markdown);
+    res.json(saveDocWithVersion(req, page, doc));
+  } catch (e) {
+    console.error('append:', e);
+    res.status(500).json({ error: 'No se pudo añadir el contenido' });
+  }
+});
+
+// Sustituye un fragmento exacto; solo se regeneran los bloques afectados
+app.post('/api/pages/:id/replace', async (req, res) => {
+  const page = db.prepare('SELECT * FROM pages WHERE id = ?').get(req.params.id);
+  if (!page) return res.status(404).json({ error: 'Página no encontrada' });
+  const { find_text, replace_text } = req.body || {};
+  if (typeof find_text !== 'string' || typeof replace_text !== 'string') {
+    return res.status(400).json({ error: 'Faltan find_text y replace_text' });
+  }
+  try {
+    const doc = await replaceInDoc(page.content, find_text, replace_text);
+    res.json(saveDocWithVersion(req, page, doc));
+  } catch (e) {
+    if (e instanceof EditError) return res.status(e.code === 'not_found' ? 404 : 409).json({ error: e.message, code: e.code });
+    console.error('replace:', e);
+    res.status(500).json({ error: 'No se pudo editar la página' });
+  }
 });
 
 // ---------- Archivos ----------

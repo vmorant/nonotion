@@ -15,6 +15,7 @@ import CodeBlockLowlight from '@tiptap/extension-code-block-lowlight';
 import { createLowlight, common } from 'lowlight';
 import { Markdown } from 'tiptap-markdown';
 import SlashCommands from './SlashCommands.js';
+import { withMarkdownTables } from '../tableMarkdown.js';
 import { api } from '../api.js';
 
 const lowlight = createLowlight(common);
@@ -48,7 +49,7 @@ export const baseExtensions = [
   Image.configure({ allowBase64: false }),
   TaskList,
   TaskItem.configure({ nested: true }),
-  Table.configure({ resizable: false }),
+  withMarkdownTables(Table).configure({ resizable: false }), // copiar/exportar sin perder tablas
   TableRow,
   TableHeader,
   TableCell,

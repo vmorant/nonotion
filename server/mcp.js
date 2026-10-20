@@ -9,6 +9,7 @@ import { z } from 'zod';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { DATA_DIR } from './db.js';
+import { markdownToDoc } from './markdown.js';
 
 const TEXT_LIMIT = 200 * 1024; // 200 KB para adjuntos de texto
 const IMAGE_LIMIT = 4 * 1024 * 1024; // 4 MB para imágenes
@@ -214,18 +215,18 @@ export function mountMcp(app, port) {
       },
       async ({ page_id, find_text, replace_text }) => {
         try {
-          const p = await (await api(`/api/pages/${page_id}/markdown`)).json();
-          const md = p.markdown || '';
-          const count = md.split(find_text).length - 1;
-          if (count === 0) return fail(new Error('find_text no aparece en la página. Lee la página con read_page y usa el texto exacto.'));
-          if (count > 1) return fail(new Error(`find_text aparece ${count} veces. Añade más contexto para que sea único.`));
-          const updated = md.replace(find_text, replace_text);
-          await api(`/api/pages/${page_id}`, {
-            method: 'PUT',
-            body: JSON.stringify({ content: updated, content_text: updated }),
+          // El servidor solo regenera los bloques que contienen el fragmento:
+          // el resto de la página (tablas, imágenes…) no se toca
+          await api(`/api/pages/${page_id}/replace`, {
+            method: 'POST',
+            body: JSON.stringify({ find_text, replace_text }),
           });
-          return ok(`Página ${page_id} editada.`);
+          return ok(`Página ${page_id} editada (la versión anterior queda en el historial).`);
         } catch (e) {
+          if (e.status === 404 && /find_text/.test(e.message)) {
+            return fail(new Error('find_text no aparece en la página. Lee la página con read_page y usa el texto exacto.'));
+          }
+          if (e.status === 409) return fail(new Error('find_text aparece más de una vez. Añade más contexto para que sea único.'));
           return fail(e);
         }
       }
@@ -249,7 +250,7 @@ export function mountMcp(app, port) {
         try {
           const body = {};
           if (markdown !== undefined) {
-            body.content = markdown;
+            body.content = await markdownToDoc(markdown); // se guarda como documento, igual que el editor
             body.content_text = markdown;
           }
           if (title !== undefined) body.title = title;
