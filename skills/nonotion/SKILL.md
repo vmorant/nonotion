@@ -57,6 +57,12 @@ Antes de crear, busca por si ya existe una página del tema y ofrécela.
   escaneado o tiene diagramas/tablas que necesitas ver, usa
   `read_document_pages` con el rango de páginas (p. ej. "1-5").
 
+- **Tablas con cálculos**: si una tabla necesita totales o cálculos, puedes
+  añadir debajo fórmulas al estilo Obsidian Advanced Tables, una por línea:
+  `<!-- TBLFM: @>$2=sum(@I..@-1) -->` (`@` fila, `$` columna, `@I` primera fila
+  de datos, `@>` última; `sum`, `mean`, `if`, `(a+b)`; `;%.2f` decimales). El
+  usuario las recalcula con ↻ Calcular; escribe tú también el resultado en la
+  celda para que la tabla sea correcta desde el principio.
 - **Enlaces entre páginas**: para referirte a otra página de NoNotion escribe
   un enlace Markdown a su ruta: `[🤖 Título](/p/<id>)`. En la app se abre
   dentro de NoNotion y la página enlazada muestra "Enlazada desde".

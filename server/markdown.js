@@ -5,7 +5,7 @@
 // para ESCRIBIR fragmentos nuevos. Nunca se reescribe una página entera a
 // partir de su propio Markdown: añadir y editar trabajan sobre el documento y
 // solo tocan los bloques afectados.
-import { withMarkdownTables, splitCellBreaks } from '../client/src/tableMarkdown.js';
+import { withMarkdownTables, withCellAlign, fixParsedTables, protectFormulas } from '../client/src/tableMarkdown.js';
 import { withImageAttrs } from '../client/src/imageAttrs.js';
 
 let editorPromise = null;
@@ -53,8 +53,8 @@ async function createEditor() {
       TaskItem.configure({ nested: true }),
       withMarkdownTables(Table),
       TableRow,
-      TableHeader,
-      TableCell,
+      withCellAlign(TableHeader),
+      withCellAlign(TableCell),
       Markdown.configure({ html: false }),
     ],
     content: '',
@@ -88,8 +88,8 @@ export async function docToMarkdown(content) {
 // Markdown -> documento Tiptap (JSON), igual que lo haría el editor web
 export async function markdownToDoc(markdown) {
   const editor = await getEditor();
-  editor.commands.setContent(markdown || '');
-  return splitCellBreaks(editor.getJSON());
+  editor.commands.setContent(protectFormulas(markdown || ''));
+  return fixParsedTables(editor.getJSON());
 }
 
 // Contenido almacenado (JSON o markdown crudo) -> documento Tiptap

@@ -12,16 +12,17 @@ import TableHeader from '@tiptap/extension-table-header';
 import TableCell from '@tiptap/extension-table-cell';
 import CodeBlockLowlight from '@tiptap/extension-code-block-lowlight';
 import { createLowlight, common } from 'lowlight';
-import { Slice, Fragment } from '@tiptap/pm/model';
+import { Slice, Fragment, DOMParser as PMDOMParser } from '@tiptap/pm/model';
 import { Markdown } from 'tiptap-markdown';
 import SlashCommands from './SlashCommands.js';
 import { HeadingFold } from './headingFold.js';
 import TableToolbar from './TableToolbar.jsx';
+import { TableNav } from './tableTools.js';
 import LinkPopover, { linkAt } from './LinkPopover.jsx';
 import { PageLinkSuggest } from './pageLinks.js';
 import { ResizableImage, insertImages } from './imageView.js';
 import { pageIdFromHref, openInNewTab } from '../fileLinks.js';
-import { withMarkdownTables, splitCellBreaks } from '../tableMarkdown.js';
+import { withMarkdownTables, withCellAlign, fixParsedTables, protectFormulas } from '../tableMarkdown.js';
 import { api } from '../api.js';
 
 const lowlight = createLowlight(common);
@@ -49,20 +50,32 @@ const TabHandler = Extension.create({
 });
 
 // Al pegar Markdown de Claude, los <br> de las celdas de tabla llegan como
-// texto literal: se convierten en saltos de párrafo dentro de la celda
+// texto literal (se convierten en saltos de párrafo dentro de la celda) y las
+// fórmulas <!-- TBLFM: … --> como párrafos (pasan a ser fórmulas de la tabla)
 function splitPastedBreaks(slice, schema) {
   let found = false;
   slice.content.descendants((node) => {
-    if (node.isText && /<br\s*\/?>/i.test(node.text)) found = true;
+    if (node.isText && /<br\s*\/?>|TBLFM:/i.test(node.text)) found = true;
     return !found;
   });
   if (!found) return slice;
-  const json = splitCellBreaks({ type: 'doc', content: slice.content.toJSON() || [] });
+  const json = fixParsedTables({ type: 'doc', content: slice.content.toJSON() || [] });
   try {
     return new Slice(Fragment.fromJSON(schema, json.content), slice.openStart, slice.openEnd);
   } catch {
     return slice;
   }
+}
+
+// Markdown con fórmulas de tabla (<!-- TBLFM: … -->, de Obsidian o Claude):
+// markdown-it las tomaría por filas de la tabla, así que se protegen antes
+function pasteMarkdownWithFormulas(view, editor, text) {
+  const html = editor.storage.markdown.parser.parse(protectFormulas(text));
+  const dom = new window.DOMParser().parseFromString(`<body>${html}</body>`, 'text/html').body;
+  const slice = PMDOMParser.fromSchema(view.state.schema).parseSlice(dom);
+  const json = fixParsedTables({ type: 'doc', content: slice.content.toJSON() || [] });
+  const fixed = new Slice(Fragment.fromJSON(view.state.schema, json.content), slice.openStart, slice.openEnd);
+  view.dispatch(view.state.tr.replaceSelection(fixed).scrollIntoView());
 }
 
 export const baseExtensions = [
@@ -76,8 +89,8 @@ export const baseExtensions = [
   // copiar/exportar sin perder tablas; columnas redimensionables arrastrando el borde
   withMarkdownTables(Table).configure({ resizable: true, cellMinWidth: 60 }),
   TableRow,
-  TableHeader,
-  TableCell,
+  withCellAlign(TableHeader),
+  withCellAlign(TableCell),
   Markdown.configure({
     html: false,
     linkify: true,
@@ -136,6 +149,7 @@ export default function Editor({ initialContent, onChange, onFileUploaded, pageI
       SlashCommands,
       HeadingFold.configure({ pageId }),
       PageLinkSuggest.configure({ getPages: () => pagesRef.current, currentId: pageId }),
+      TableNav,
       Placeholder.configure({
         placeholder: "Escribe algo, pega Markdown de Claude, o usa '/' para comandos…",
       }),
@@ -152,6 +166,11 @@ export default function Editor({ initialContent, onChange, onFileUploaded, pageI
         }
         // Pegar la URL de una página de NoNotion → enlace con su título
         const text = (event.clipboardData?.getData('text/plain') || '').trim();
+        if (/<!--\s*TBLFM:/.test(text) && !event.clipboardData?.getData('text/html')) {
+          event.preventDefault();
+          pasteMarkdownWithFormulas(view, editorRef.current, text);
+          return true;
+        }
         const linked = /^https?:\/\/\S+$/.test(text) && pageIdFromHref(text);
         const page = linked && pagesRef.current.find((p) => p.id === linked);
         if (page && view.state.selection.empty) {

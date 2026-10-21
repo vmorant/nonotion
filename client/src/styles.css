@@ -1766,9 +1766,9 @@ button.page-icon:hover {
 }
 
 .table-toolbar {
-  position: absolute;
-  z-index: 20;
-  transform: translateY(calc(-100% - 4px));
+  position: fixed;
+  bottom: 14px;
+  z-index: 40;
   display: flex;
   align-items: center;
   gap: 2px;
@@ -2599,3 +2599,84 @@ button.page-icon:hover {
     display: none;
   }
 }
+
+/* ---------- Tablas avanzadas: barra en dos partes, fórmulas ---------- */
+
+.table-toolbar {
+  flex-direction: column;
+  align-items: stretch;
+  padding: 5px 8px;
+  box-shadow: 0 8px 30px rgba(0, 0, 0, 0.55);
+}
+
+.table-toolbar-row {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  flex-wrap: wrap;
+}
+
+.table-toolbar button.active {
+  color: var(--accent);
+  background: rgba(74, 158, 255, 0.12);
+}
+
+.table-toolbar-help {
+  color: var(--text-dim);
+  padding: 0 6px;
+  cursor: help;
+}
+
+.table-fx {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 6px 4px 2px;
+  border-top: 1px solid var(--border);
+  margin-top: 4px;
+}
+
+.table-fx textarea {
+  width: 100%;
+  min-width: 420px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--text);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.8rem;
+  padding: 6px;
+  resize: vertical;
+}
+
+.table-fx-actions {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.table-fx-actions button {
+  border: 1px solid var(--border);
+}
+
+.table-fx-actions button.primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+
+.table-fx-actions a {
+  color: var(--accent);
+  font-size: 0.75rem;
+}
+
+.table-fx-hint {
+  color: var(--text-dim);
+  font-size: 0.72rem;
+}
+
+.table-toolbar .table-toolbar-msg {
+  padding: 2px 6px 0;
+}
+
