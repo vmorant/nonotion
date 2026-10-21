@@ -6,6 +6,7 @@ import Attachments from './Attachments.jsx';
 import EmojiPicker from './EmojiPicker.jsx';
 import HistoryModal from './HistoryModal.jsx';
 import PageOutline from './PageOutline.jsx';
+import { TagEditor } from './Tags.jsx';
 
 function breadcrumb(pages, id) {
   const byId = new Map(pages.map((p) => [p.id, p]));
@@ -51,7 +52,7 @@ function draftDiffers(draft, page) {
   return false;
 }
 
-export default function PageView({ pages, pageEvent, onTreeChange, onDelete, onCreateChild, onDuplicate, onFavorite }) {
+export default function PageView({ pages, pageEvent, onTreeChange, onDelete, onCreateChild, onDuplicate, onFavorite, allTags = [] }) {
   const { id } = useParams();
   const [page, setPage] = useState(null);
   const [files, setFiles] = useState([]);
@@ -67,6 +68,8 @@ export default function PageView({ pages, pageEvent, onTreeChange, onDelete, onC
   const [draftOffer, setDraftOffer] = useState(null); // borrador local pendiente de recuperar
   const [editor, setEditor] = useState(null);
   const [prefsOverride, setPrefsOverride] = useState({}); // cambio local hasta que llegue el árbol
+  const [tagsOverride, setTagsOverride] = useState(null);
+  const [backlinks, setBacklinks] = useState([]);
   const editorRef = useRef(null);
   const focusedRef = useRef(false);
   const saveTimer = useRef(null);
@@ -186,6 +189,7 @@ export default function PageView({ pages, pageEvent, onTreeChange, onDelete, onC
     setConflictSaved(false);
     setDraftOffer(null);
     setPrefsOverride({});
+    setTagsOverride(null);
     setEditor(null);
     setStatus('saved');
     inFlight.current = false;
@@ -213,6 +217,18 @@ export default function PageView({ pages, pageEvent, onTreeChange, onDelete, onC
       draftBaseRev.current = null;
     };
   }, [id, loadPage]);
+
+  // Páginas que enlazan a esta (se refresca cuando cambia el árbol)
+  useEffect(() => {
+    let cancelled = false;
+    api
+      .backlinks(id)
+      .then((r) => !cancelled && setBacklinks(r))
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [id, pages]);
 
   // Si la pestaña pasa a segundo plano (cambio de app, bloqueo del móvil),
   // se guarda ya en vez de esperar al temporizador
@@ -284,6 +300,17 @@ export default function PageView({ pages, pageEvent, onTreeChange, onDelete, onC
   const meta = pages.find((p) => p.id === id) || page;
   const fullWidth = prefsOverride.full_width ?? !!meta.full_width;
   const favorite = prefsOverride.favorite ?? !!meta.favorite_at;
+  const pageTags = tagsOverride ?? meta.tags ?? page.tags ?? [];
+
+  const changeTags = async (list) => {
+    setTagsOverride(list);
+    try {
+      await api.setPageTags(id, list);
+      await onTreeChange();
+    } finally {
+      setTagsOverride(null);
+    }
+  };
 
   const setPref = async (key, value) => {
     setPrefsOverride((o) => ({ ...o, [key]: value }));
@@ -501,9 +528,12 @@ export default function PageView({ pages, pageEvent, onTreeChange, onDelete, onC
           />
         </div>
 
+        <TagEditor tags={pageTags} allTags={allTags} onChange={changeTags} />
+
         <Editor
           key={`${id}:${reloadKey}`}
           pageId={id}
+          pages={pages}
           initialContent={parseContent(page.content)}
           onReady={(ed) => {
             editorRef.current = ed;
@@ -515,6 +545,17 @@ export default function PageView({ pages, pageEvent, onTreeChange, onDelete, onC
         />
 
         <Attachments pageId={id} files={files} onChange={setFiles} />
+
+        {backlinks.length > 0 && (
+          <section className="backlinks">
+            <div className="backlinks-title">↩ Enlazada desde</div>
+            {backlinks.map((b) => (
+              <Link key={b.id} to={`/p/${b.id}`} className="backlink">
+                {b.icon || '📄'} {b.title || 'Sin título'}
+              </Link>
+            ))}
+          </section>
+        )}
       </div>
       <PageOutline editor={editor} />
       </div>

@@ -237,7 +237,7 @@ function SheetView({ file, onFallback }) {
 }
 
 export default function FileViewer({ file, onClose }) {
-  const url = `/files/${file.id}/${encodeURIComponent(file.name)}`;
+  const url = file.url || `/files/${file.id}/${encodeURIComponent(file.name)}`;
   const [asPdf, setAsPdf] = useState(false);
   const detected = previewKind(file);
   const kind = detected === 'sheet' && asPdf ? 'office' : detected;

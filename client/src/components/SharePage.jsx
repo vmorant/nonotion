@@ -4,12 +4,20 @@ import { useEditor, EditorContent } from '@tiptap/react';
 import { api, humanSize, parseContent } from '../api.js';
 import { baseExtensions } from './Editor.jsx';
 import FileViewer, { previewKind } from './FileViewer.jsx';
+import { fileFromHref } from '../fileLinks.js';
 
 export default function SharePage() {
   const { token } = useParams();
   const [page, setPage] = useState(null);
   const [error, setError] = useState(null);
   const [viewing, setViewing] = useState(null);
+
+  // Clic en una imagen → visor
+  useEffect(() => {
+    const onView = (e) => setViewing(e.detail);
+    document.addEventListener('nonotion:view-file', onView);
+    return () => document.removeEventListener('nonotion:view-file', onView);
+  }, []);
 
   useEffect(() => {
     api.sharedPage(token).then(setPage).catch((e) => setError(e.message));
@@ -22,6 +30,17 @@ export default function SharePage() {
       extensions: baseExtensions,
       content,
       editable: false,
+      editorProps: {
+        // Enlaces a adjuntos: visor; el resto se abre en pestaña nueva (target _blank)
+        handleClick: (view, pos, event) => {
+          const a = event.target.closest?.('a[href]');
+          const f = a && fileFromHref(a.getAttribute('href'));
+          if (!f || !previewKind(f)) return false;
+          event.preventDefault();
+          setViewing(f);
+          return true;
+        },
+      },
     },
     [page]
   );

@@ -106,6 +106,13 @@ const ITEMS = [
         .run(),
   },
   {
+    title: 'Enlace a página',
+    hint: 'Enlaza otra página de NoNotion (o escribe [[)',
+    icon: '🔗',
+    keywords: 'enlace link pagina vincular referencia',
+    run: (e, r) => e.chain().focus().deleteRange(r).insertContent('[[').run(),
+  },
+  {
     title: 'Imagen',
     hint: 'Subir una imagen',
     icon: '🖼',
@@ -117,7 +124,9 @@ const ITEMS = [
   },
 ];
 
-function createMenu() {
+// Menú flotante de sugerencias (lo usan "/" y "[["). Se construye con
+// textContent: los títulos de página son texto del usuario, nunca HTML.
+export function createMenu() {
   let el = null;
   let selected = 0;
   let currentItems = [];
@@ -129,7 +138,16 @@ function createMenu() {
     currentItems.forEach((item, i) => {
       const btn = document.createElement('button');
       btn.className = 'slash-item' + (i === selected ? ' selected' : '');
-      btn.innerHTML = `<span class="slash-icon">${item.icon}</span><span><span class="slash-title">${item.title}</span><span class="slash-hint">${item.hint}</span></span>`;
+      const icon = btn.appendChild(document.createElement('span'));
+      icon.className = 'slash-icon';
+      icon.textContent = item.icon;
+      const body = btn.appendChild(document.createElement('span'));
+      const title = body.appendChild(document.createElement('span'));
+      title.className = 'slash-title';
+      title.textContent = item.title;
+      const hint = body.appendChild(document.createElement('span'));
+      hint.className = 'slash-hint';
+      hint.textContent = item.hint || '';
       btn.addEventListener('mousedown', (ev) => {
         ev.preventDefault();
         currentCommand(item);

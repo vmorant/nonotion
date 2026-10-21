@@ -1,8 +1,10 @@
 import { useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { api } from '../api.js';
+import { TagChip } from './Tags.jsx';
 
-export default function SearchModal({ onClose }) {
+export default function SearchModal({ onClose, tags = [] }) {
+  const colorOf = new Map(tags.map((t) => [t.name.toLowerCase(), t.color]));
   const [q, setQ] = useState('');
   const [results, setResults] = useState([]);
   const [selected, setSelected] = useState(0);
@@ -53,7 +55,7 @@ export default function SearchModal({ onClose }) {
           ref={inputRef}
           value={q}
           onChange={(e) => setQ(e.target.value)}
-          placeholder="Buscar en todas las páginas…"
+          placeholder="Buscar en todas las páginas… (#etiqueta para filtrar)"
         />
         <div className="search-results">
           {results.map((r, i) => (
@@ -66,6 +68,13 @@ export default function SearchModal({ onClose }) {
               <span className="result-title">
                 {r.icon || '📄'} {r.title || 'Sin título'}
               </span>
+              {r.tags?.length > 0 && (
+                <span className="result-tags">
+                  {r.tags.map((t) => (
+                    <TagChip key={t} name={t} color={colorOf.get(t.toLowerCase())} />
+                  ))}
+                </span>
+              )}
               {r.snippet && <span className="result-snippet" dangerouslySetInnerHTML={{ __html: r.snippet }} />}
             </button>
           ))}

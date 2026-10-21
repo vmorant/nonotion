@@ -21,6 +21,10 @@ Webapp autoalojada tipo Notion, **sin límites de capacidad**: tus apuntes, resp
 - **Tablas cómodas** — cabecera fija al desplazarte, scroll horizontal en tablas anchas, columnas redimensionables arrastrando el borde, y una barra sobre la tabla para ordenar filas por la columna actual (entiende números como `1.234,5`), añadir/quitar filas y columnas y **copiar la tabla para pegarla en Excel**. Al pegar Markdown de Claude, los `<br>` de las celdas se convierten en saltos de línea.
 - **Ancho completo por página** — botón ↔ para usar todo el ancho de la pantalla (se guarda en la página, igual en todos tus dispositivos).
 - **Favoritas y recientes** — ★ en una página (o en su menú ⋯ del árbol) la fija arriba en la barra lateral; "Recientes" muestra las últimas páginas que abriste en ese navegador.
+- **Enlaces que se abren** — clic en un enlace: burbuja con *Abrir* (páginas de NoNotion se abren dentro de la app; adjuntos en el visor), *Pestaña nueva*, *Vista previa* de webs externas (si la web permite mostrarse dentro de otra), editar y quitar. `Ctrl/⌘+clic` o clic central abren directamente en pestaña nueva.
+- **Enlaces entre páginas** — escribe `[[` (o `/enlace`) para buscar una página y enlazarla; pegar la URL de una página de NoNotion la convierte en enlace con su título. Cada página muestra abajo "↩ Enlazada desde" con las páginas que la enlazan.
+- **Etiquetas** — clasifica cada página con etiquetas de colores (bajo el título, con autocompletado). La vista **🏷 Etiquetas** filtra por una o varias (todas / alguna), lista también los adjuntos de esas páginas y tiene un filtro "Sin etiquetar" para ir clasificando. Renombrar (fusiona si ya existe), cambiar color o borrar desde su menú ⋯. En la búsqueda `Ctrl+K`, `#etiqueta` filtra resultados. Claude las lee y, si se lo pides, las aplica (`list_tags`, `tag_page`).
+- **Imágenes ágiles** — al pegar o arrastrar, la imagen aparece al instante donde la sueltas con la subida avanzando encima. Redimensiona arrastrando los tiradores laterales, o con la barra al seleccionarla (25/50/75/100 %, original), alinéala a izquierda/centro/derecha, y ábrela a tamaño completo con doble clic. El tamaño se guarda en la página y se respeta cuando Claude la edita.
 - **Export ZIP completo** — descarga todo el workspace como Markdown + archivos adjuntos con enlaces relativos: backup portable, cero lock-in.
 - **Calendario propio (sin integraciones externas)** — vista mensual y semanal que muestra qué páginas creaste y editaste cada día (registro de actividad interno): de un vistazo ves en qué trabajaste y qué días no. Los datos antiguos se reconstruyen automáticamente desde el historial de versiones.
 - **Reuniones** — asigna una fecha a cualquier página y queda fijada ese día en el calendario (también fechas futuras). El botón "+" de un día crea una página de reunión con plantilla (asistentes, agenda, notas, acciones), y el comando `/reunión` inserta la misma plantilla en cualquier página.
@@ -184,7 +188,8 @@ Los clientes MCP no pueden pasar el login de Zero Trust, así que crea una aplic
 | `trash_page` | Mover a la papelera (reversible; no existe borrado definitivo vía MCP) |
 | `read_attachment` | Leer el contenido de un adjunto: extrae texto de PDF/Word/Excel/PowerPoint, muestra imágenes y archivos de texto/código |
 | `read_document_pages` | Renderiza páginas concretas de un PDF/documento como imágenes (escaneados, diagramas, tablas con formato) |
-| `attach_file` | Subir un archivo (código generado, configs…) a una página |
+| `attach_file` | Subir un archivo (código generado, configs…) a una página; rechaza binarios incompletos |
+| `list_tags` / `tag_page` | Ver las etiquetas existentes / añadir o quitar etiquetas de una página |
 
 ### Skill recomendada
 
@@ -206,6 +211,11 @@ En `skills/nonotion/SKILL.md` hay una skill lista para tu Claude: cópiala a `~/
 | GET | `/files/:id/:nombre` | Descargar / ver archivo |
 | GET | `/files/:id/preview` | Documento de oficina convertido a PDF (LibreOffice, con caché) |
 | GET | `/files/:id/sheets` | Hoja de cálculo como JSON para el visor (hojas, celdas con formato, combinadas, anchos) |
+| GET | `/api/tags` | Etiquetas con número de páginas |
+| PUT | `/api/pages/:id/tags` | Fijar las etiquetas de una página (`{tags: [...]}`) |
+| PATCH/DELETE | `/api/tags/:nombre` | Color / renombrar (fusiona) · borrar etiqueta |
+| GET | `/api/tagged?tags=a,b&mode=all\|any` | Páginas con esas etiquetas y sus adjuntos |
+| GET | `/api/pages/:id/backlinks` | Páginas que enlazan a esta |
 | POST | `/api/pages/:id/prefs` | Favorita / ancho completo (`{favorite?, full_width?}`); no crea versión ni cambia la revisión |
 | GET | `/api/search?q=` | Búsqueda full-text |
 | POST/DELETE | `/api/pages/:id/share` | Activar / desactivar enlace público |

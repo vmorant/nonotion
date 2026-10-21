@@ -87,6 +87,21 @@ if (!pageCols.includes('full_width')) {
   db.exec('ALTER TABLE pages ADD COLUMN full_width INTEGER NOT NULL DEFAULT 0');
 }
 
+// Etiquetas: cada página puede tener varias; el nombre no distingue mayúsculas
+db.exec(`
+CREATE TABLE IF NOT EXISTS tags (
+  name TEXT PRIMARY KEY COLLATE NOCASE,
+  color TEXT NOT NULL DEFAULT 'gray',
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE TABLE IF NOT EXISTS page_tags (
+  page_id TEXT NOT NULL REFERENCES pages(id) ON DELETE CASCADE,
+  tag TEXT NOT NULL COLLATE NOCASE REFERENCES tags(name) ON DELETE CASCADE ON UPDATE CASCADE,
+  PRIMARY KEY (page_id, tag)
+);
+CREATE INDEX IF NOT EXISTS idx_page_tags_tag ON page_tags(tag);
+`);
+
 // Papelera de adjuntos: borrar un archivo lo marca, no lo elimina del disco
 const fileCols = db.prepare('PRAGMA table_info(files)').all().map((c) => c.name);
 if (!fileCols.includes('deleted_at')) {

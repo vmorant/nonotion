@@ -145,6 +145,13 @@ export const api = {
   duplicatePage: (id) => req(`/api/pages/${id}/duplicate`, { method: 'POST' }),
   pagePrefs: (id, prefs) => req(`/api/pages/${id}/prefs`, { method: 'POST', body: JSON.stringify(prefs) }),
   sheets: (fileId) => req(`/files/${fileId}/sheets`),
+  backlinks: (id) => req(`/api/pages/${id}/backlinks`),
+  tags: () => req('/api/tags'),
+  setPageTags: (id, tags) => req(`/api/pages/${id}/tags`, { method: 'PUT', body: JSON.stringify({ tags }) }),
+  updateTag: (name, data) => req(`/api/tags/${encodeURIComponent(name)}`, { method: 'PATCH', body: JSON.stringify(data) }),
+  deleteTag: (name) => req(`/api/tags/${encodeURIComponent(name)}`, { method: 'DELETE' }),
+  tagged: (tags, mode) =>
+    req(`/api/tagged?tags=${encodeURIComponent(tags.join(','))}&mode=${mode === 'any' ? 'any' : 'all'}`),
   trash: () => req('/api/trash'),
   restoreTrash: (id) => req(`/api/trash/${id}/restore`, { method: 'POST' }),
   deleteTrashItem: (id) => req(`/api/trash/${id}`, { method: 'DELETE' }),

@@ -111,16 +111,20 @@ export function mountMcp(app, port) {
       {
         title: 'Buscar páginas',
         description:
-          'Busca páginas en NoNotion por texto (títulos y contenido). Úsala SIEMPRE antes de crear una página nueva, para comprobar si ya existe una sobre el tema.',
-        inputSchema: { query: z.string().describe('Texto a buscar') },
+          'Busca páginas en NoNotion por texto (títulos y contenido) y/o etiquetas. Úsala SIEMPRE antes de crear una página nueva, para comprobar si ya existe una sobre el tema. Con solo tags (query vacío) lista las páginas que tienen todas esas etiquetas.',
+        inputSchema: {
+          query: z.string().describe('Texto a buscar (puede ser vacío si filtras por etiquetas)'),
+          tags: z.array(z.string()).optional().describe('Etiquetas que deben tener todas las páginas devueltas'),
+        },
       },
-      async ({ query }) => {
+      async ({ query, tags }) => {
         try {
-          const rows = await (await api(`/api/search?q=${encodeURIComponent(query)}`)).json();
+          const qs = `q=${encodeURIComponent(query || '')}${tags?.length ? `&tags=${encodeURIComponent(tags.join(','))}` : ''}`;
+          const rows = await (await api(`/api/search?${qs}`)).json();
           if (!rows.length) return ok('Sin resultados.');
           return ok(
             rows
-              .map((r) => `- ${r.icon || '📄'} ${r.title || 'Sin título'} (id: ${r.id})${r.snippet ? `\n  …${r.snippet.replace(/<\/?mark>/g, '**')}…` : ''}`)
+              .map((r) => `- ${r.icon || '📄'} ${r.title || 'Sin título'} (id: ${r.id})${r.tags?.length ? ` [${r.tags.map((t) => '#' + t).join(' ')}]` : ''}${r.snippet ? `\n  …${r.snippet.replace(/<\/?mark>/g, '**')}…` : ''}`)
               .join('\n')
           );
         } catch (e) {
@@ -133,7 +137,7 @@ export function mountMcp(app, port) {
       'list_pages',
       {
         title: 'Listar páginas',
-        description: 'Devuelve el árbol completo de páginas de NoNotion (id, icono, título, fecha asignada).',
+        description: 'Devuelve el árbol completo de páginas de NoNotion (id, icono, título, fecha asignada, etiquetas).',
         inputSchema: {},
       },
       async () => {
@@ -150,7 +154,7 @@ export function mountMcp(app, port) {
           const walk = (parentId, depth) => {
             for (const p of children.get(parentId) || []) {
               lines.push(
-                `${'  '.repeat(depth)}- ${p.icon || '📄'} ${p.title || 'Sin título'} (id: ${p.id}${p.page_date ? `, fecha: ${p.page_date}` : ''})`
+                `${'  '.repeat(depth)}- ${p.icon || '📄'} ${p.title || 'Sin título'} (id: ${p.id}${p.page_date ? `, fecha: ${p.page_date}` : ''})${p.tags?.length ? ` [${p.tags.map((t) => '#' + t).join(' ')}]` : ''}`
               );
               walk(p.id, depth + 1);
             }
@@ -175,7 +179,8 @@ export function mountMcp(app, port) {
         try {
           const p = await (await api(`/api/pages/${page_id}/markdown`)).json();
           let out = `# ${p.icon ? p.icon + ' ' : ''}${p.title || 'Sin título'}\n`;
-          out += `(id: ${p.id}${p.page_date ? ` · fecha: ${p.page_date}` : ''} · actualizada: ${p.updated_at}${p.trashed ? ' · EN PAPELERA' : ''})\n\n`;
+          out += `(id: ${p.id}${p.page_date ? ` · fecha: ${p.page_date}` : ''} · actualizada: ${p.updated_at}${p.trashed ? ' · EN PAPELERA' : ''})\n`;
+          out += p.tags?.length ? `Etiquetas: ${p.tags.map((t) => '#' + t).join(' ')}\n\n` : '\n';
           out += p.markdown || '(página vacía)';
           if (p.files?.length) {
             out +=
@@ -201,6 +206,7 @@ export function mountMcp(app, port) {
           parent_id: z.string().optional().describe('Id de la página padre'),
           page_date: z.string().optional().describe('Fecha YYYY-MM-DD para fijarla en el calendario (reuniones)'),
           icon: z.string().optional().describe('Emoji como icono'),
+          tags: z.array(z.string()).optional().describe('Etiquetas para clasificarla (reutiliza las existentes: list_tags)'),
         },
       },
       async (args) => {
@@ -404,6 +410,48 @@ export function mountMcp(app, port) {
           if (e.status === 501) {
             return ok('El servidor no tiene poppler instalado para renderizar páginas (apt install poppler-utils).');
           }
+          return fail(e);
+        }
+      }
+    );
+
+    server.registerTool(
+      'list_tags',
+      {
+        title: 'Listar etiquetas',
+        description: 'Devuelve todas las etiquetas de NoNotion con cuántas páginas tiene cada una. Úsala antes de etiquetar para reutilizar las existentes en vez de inventar variantes.',
+        inputSchema: {},
+      },
+      async () => {
+        try {
+          const tags = await (await api('/api/tags')).json();
+          if (!tags.length) return ok('Todavía no hay etiquetas.');
+          return ok(tags.map((t) => `- #${t.name} (${t.count} página${t.count === 1 ? '' : 's'})`).join('\n'));
+        } catch (e) {
+          return fail(e);
+        }
+      }
+    );
+
+    server.registerTool(
+      'tag_page',
+      {
+        title: 'Etiquetar página',
+        description: 'Añade y/o quita etiquetas de una página (no cambia su contenido). Úsala solo cuando el usuario pida clasificar o etiquetar.',
+        inputSchema: {
+          page_id: z.string().describe('Id de la página'),
+          add: z.array(z.string()).optional().describe('Etiquetas a añadir'),
+          remove: z.array(z.string()).optional().describe('Etiquetas a quitar'),
+        },
+      },
+      async ({ page_id, add = [], remove = [] }) => {
+        try {
+          const page = await (await api(`/api/pages/${page_id}`)).json();
+          const rm = new Set(remove.map((t) => t.replace(/^#/, '').trim().toLowerCase()));
+          const next = [...(page.tags || []).filter((t) => !rm.has(t.toLowerCase())), ...add];
+          const r = await (await api(`/api/pages/${page_id}/tags`, { method: 'PUT', body: JSON.stringify({ tags: next }) })).json();
+          return ok(`Etiquetas de "${page.title || 'Sin título'}": ${r.tags.length ? r.tags.map((t) => '#' + t).join(' ') : '(ninguna)'}`);
+        } catch (e) {
           return fail(e);
         }
       }

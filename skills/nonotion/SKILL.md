@@ -57,6 +57,16 @@ Antes de crear, busca por si ya existe una página del tema y ofrécela.
   escaneado o tiene diagramas/tablas que necesitas ver, usa
   `read_document_pages` con el rango de páginas (p. ej. "1-5").
 
+- **Enlaces entre páginas**: para referirte a otra página de NoNotion escribe
+  un enlace Markdown a su ruta: `[🤖 Título](/p/<id>)`. En la app se abre
+  dentro de NoNotion y la página enlazada muestra "Enlazada desde".
+- **Etiquetas**: `read_page`, `list_pages` y `search_pages` muestran las
+  etiquetas (`#nombre`). `search_pages` acepta `tags` para filtrar. Para
+  clasificar usa `tag_page` (añadir/quitar) **solo cuando el usuario lo pida**;
+  antes consulta `list_tags` y reutiliza las existentes en vez de crear
+  variantes (mayúsculas, plurales, sinónimos). Puedes *proponer* etiquetas en
+  tu respuesta sin aplicarlas.
+
 ## Prohibiciones
 
 - No borres ni vacíes páginas salvo orden explícita; para borrar usa solo

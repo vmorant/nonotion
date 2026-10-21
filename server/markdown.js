@@ -6,6 +6,7 @@
 // partir de su propio Markdown: añadir y editar trabajan sobre el documento y
 // solo tocan los bloques afectados.
 import { withMarkdownTables, splitCellBreaks } from '../client/src/tableMarkdown.js';
+import { withImageAttrs } from '../client/src/imageAttrs.js';
 
 let editorPromise = null;
 
@@ -47,7 +48,7 @@ async function createEditor() {
       StarterKit.configure({ codeBlock: false }),
       CodeBlockLowlight.configure({ lowlight: createLowlight(common) }),
       Link.configure({ openOnClick: false, autolink: true }),
-      Image,
+      withImageAttrs(Image), // conserva ancho y alineación
       TaskList,
       TaskItem.configure({ nested: true }),
       withMarkdownTables(Table),

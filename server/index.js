@@ -11,6 +11,7 @@ import db, { DATA_DIR, FILES_DIR, ftsUpsert, ftsDelete, extractText, logActivity
 import { docToMarkdown, markdownToDoc, appendMarkdown, replaceInDoc, EditError } from './markdown.js';
 import { mountMcp, getOrCreateToken } from './mcp.js';
 import { setupAuth, purgeExpiredSessions } from './auth.js';
+import { mountTags, tagsOf, setPageTags, copyTags, pagesWithTags, TAGS_COLUMN, splitTags } from './tags.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PORT = process.env.PORT || 3000;
@@ -128,11 +129,11 @@ app.get('/api/pages', (req, res) => {
   const rows = db
     .prepare(
       `SELECT id, parent_id, title, icon, position, updated_at, page_date,
-              share_token IS NOT NULL AS shared, favorite_at, full_width
+              share_token IS NOT NULL AS shared, favorite_at, full_width, ${TAGS_COLUMN}
        FROM pages WHERE trashed_at IS NULL ORDER BY position, created_at`
     )
     .all();
-  res.json(rows);
+  res.json(rows.map((r) => ({ ...r, tags: splitTags(r.tags) })));
 });
 
 const validDate = (v) => (typeof v === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(v) ? v : null);
@@ -159,8 +160,29 @@ app.get('/api/pages/:id', (req, res) => {
   page.files = db
     .prepare('SELECT id, name, mime, size, created_at FROM files WHERE page_id = ? AND deleted_at IS NULL ORDER BY created_at')
     .all(page.id);
+  page.tags = tagsOf(page.id);
   res.json(page);
 });
+
+// Páginas que enlazan a esta (enlaces internos /p/<id>)
+app.get('/api/pages/:id/backlinks', (req, res) => {
+  if (!/^[A-Za-z0-9_-]+$/.test(req.params.id)) return res.json([]);
+  const exact = new RegExp(`/p/${req.params.id}(?![A-Za-z0-9_-])`);
+  const rows = db
+    .prepare(
+      `SELECT id, title, icon FROM pages
+       WHERE trashed_at IS NULL AND id != ? AND instr(content, '/p/' || ?) > 0
+       ORDER BY updated_at DESC LIMIT 100`
+    )
+    .all(req.params.id, req.params.id)
+    .filter((p) => {
+      // instr no distingue un id que sea prefijo de otro
+      return exact.test(db.prepare('SELECT content FROM pages WHERE id = ?').get(p.id).content);
+    });
+  res.json(rows);
+});
+
+mountTags(app, { notifyTree });
 
 function snapshotVersion(page, { throttled }) {
   if (throttled) {
@@ -332,6 +354,7 @@ app.post('/api/pages/:id/duplicate', (req, res) => {
       db.prepare('UPDATE pages SET content = ? WHERE id = ?').run(content, newId);
     }
     ftsUpsert(newId, titleOverride ?? src.title, src.content_text);
+    copyTags(srcId, newId);
     const children = db
       .prepare('SELECT id FROM pages WHERE parent_id = ? AND trashed_at IS NULL ORDER BY position, created_at')
       .all(srcId);
@@ -560,7 +583,7 @@ function getOrCreateInbox() {
 }
 
 app.post('/api/capture', async (req, res) => {
-  const { markdown, title, parent_id, page_date, icon } = req.body || {};
+  const { markdown, title, parent_id, page_date, icon, tags } = req.body || {};
   if (typeof markdown !== 'string' || !markdown.trim()) {
     return res.status(400).json({ error: 'Falta el campo "markdown"' });
   }
@@ -590,8 +613,9 @@ app.post('/api/capture', async (req, res) => {
     'INSERT INTO pages (id, parent_id, title, icon, content, content_text, position, page_date) VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
   ).run(id, parentId, pageTitle, typeof icon === 'string' && icon ? icon : '🤖', content, text, pos, validDate(page_date));
   ftsUpsert(id, pageTitle, text);
+  const pageTags = Array.isArray(tags) && tags.length ? setPageTags(id, tags) : [];
   notifyTree(req);
-  res.json({ id, title: pageTitle, url: `/p/${id}` });
+  res.json({ id, title: pageTitle, url: `/p/${id}`, tags: pageTags });
 });
 
 // ---------- Lectura/escritura en Markdown (usada por el MCP) ----------
@@ -611,6 +635,7 @@ app.get('/api/pages/:id/markdown', async (req, res) => {
     parent_id: page.parent_id,
     updated_at: page.updated_at,
     trashed: !!page.trashed_at,
+    tags: tagsOf(page.id),
     markdown,
     files,
   });
@@ -1127,26 +1152,53 @@ app.delete('/api/files/:id', (req, res) => {
 
 // ---------- Búsqueda ----------
 
+// Búsqueda full-text. "#etiqueta" en la consulta (o ?tags=a,b) filtra por
+// etiquetas; solo etiquetas, sin texto, lista las páginas que las tienen.
 app.get('/api/search', (req, res) => {
-  const q = String(req.query.q || '').trim();
-  if (!q) return res.json([]);
+  let q = String(req.query.q || '').trim();
+  const tagList = String(req.query.tags || '').split(',').filter(Boolean);
+  q = q.replace(/(^|\s)#([^\s#]+)/g, (m, sp, t) => {
+    tagList.push(t);
+    return ' ';
+  }).trim();
+  if (!q && !tagList.length) return res.json([]);
+  const tagged = tagList.length ? new Set(pagesWithTags(tagList, 'all') || []) : null;
+  const withTags = (rows) => rows.map((r) => ({ ...r, tags: tagsOf(r.id) }));
+  if (!q) {
+    const ids = [...tagged].slice(0, 50);
+    if (!ids.length) return res.json([]);
+    const rows = db
+      .prepare(`SELECT id, title, icon, NULL AS snippet FROM pages WHERE id IN (${ids.map(() => '?').join(', ')}) ORDER BY updated_at DESC`)
+      .all(...ids);
+    return res.json(withTags(rows));
+  }
   const ftsQuery = q
     .split(/\s+/)
     .map((t) => '"' + t.replace(/"/g, '""') + '"*')
     .join(' ');
   try {
-    const rows = db
+    let rows = db
       .prepare(
         `SELECT p.id, p.title, p.icon,
-                snippet(pages_fts, 2, '<mark>', '</mark>', '…', 14) AS snippet
+                snippet(pages_fts, 2, char(2), char(3), '…', 14) AS snippet
          FROM pages_fts
          JOIN pages p ON p.id = pages_fts.page_id
          WHERE pages_fts MATCH ? AND p.trashed_at IS NULL
          ORDER BY rank
-         LIMIT 20`
+         LIMIT ?`
       )
-      .all(ftsQuery);
-    res.json(rows);
+      .all(ftsQuery, tagged ? 500 : 20);
+    if (tagged) rows = rows.filter((r) => tagged.has(r.id)).slice(0, 20);
+    // El fragmento es texto de la página: se escapa y solo <mark> queda como HTML
+    for (const r of rows) {
+      r.snippet = (r.snippet || '')
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/\u0002/g, '<mark>')
+        .replace(/\u0003/g, '</mark>');
+    }
+    res.json(withTags(rows));
   } catch {
     res.json([]);
   }
@@ -1232,9 +1284,10 @@ app.get('/api/export', async (req, res) => {
         usedFiles.add(fid);
         return '../'.repeat(depth) + fileEntryName(f);
       });
-      const heading = md.trimStart().startsWith('# ')
-        ? ''
-        : `# ${page.icon ? page.icon + ' ' : ''}${page.title || 'Sin título'}\n\n`;
+      const pageTags = tagsOf(page.id);
+      const heading =
+        (md.trimStart().startsWith('# ') ? '' : `# ${page.icon ? page.icon + ' ' : ''}${page.title || 'Sin título'}\n\n`) +
+        (pageTags.length ? `Etiquetas: ${pageTags.map((t) => '#' + t.replace(/\s+/g, '_')).join(' ')}\n\n` : '');
       const pageFiles = allFiles.filter((f) => f.page_id === page.id);
       let appendix = '';
       if (pageFiles.length) {

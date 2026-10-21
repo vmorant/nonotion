@@ -6,6 +6,9 @@ import PageView from './components/PageView.jsx';
 import SearchModal from './components/SearchModal.jsx';
 import TrashModal from './components/TrashModal.jsx';
 import CalendarView from './components/CalendarView.jsx';
+import TagsView from './components/TagsView.jsx';
+import FileViewer from './components/FileViewer.jsx';
+import WebPreview from './components/WebPreview.jsx';
 
 export default function App() {
   const [pages, setPages] = useState([]);
@@ -15,11 +18,28 @@ export default function App() {
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [pageEvent, setPageEvent] = useState(null); // { id, n } cuando una página cambia en remoto
   const [recent, setRecent] = useState(readRecent);
+  const [tags, setTags] = useState([]);
+  const [viewing, setViewing] = useState(null); // adjunto abierto en el visor (desde enlaces o imágenes)
+  const [previewing, setPreviewing] = useState(null); // web externa en vista previa
   const navigate = useNavigate();
   const location = useLocation();
 
   const refreshTree = useCallback(async () => {
-    setPages(await api.pages());
+    const [p, t] = await Promise.all([api.pages(), api.tags().catch(() => null)]);
+    setPages(p);
+    if (t) setTags(t);
+  }, []);
+
+  // Enlaces a adjuntos e imágenes → visor; webs externas → vista previa
+  useEffect(() => {
+    const onView = (e) => setViewing(e.detail);
+    const onPreview = (e) => setPreviewing(e.detail);
+    document.addEventListener('nonotion:view-file', onView);
+    document.addEventListener('nonotion:preview-url', onPreview);
+    return () => {
+      document.removeEventListener('nonotion:view-file', onView);
+      document.removeEventListener('nonotion:preview-url', onPreview);
+    };
   }, []);
 
   useEffect(() => {
@@ -148,9 +168,11 @@ export default function App() {
                 onCreateChild={createPage}
                 onDuplicate={duplicatePage}
                 onFavorite={setFavorite}
+                allTags={tags}
               />
             }
           />
+          <Route path="/tags" element={<TagsView pages={pages} tags={tags} onChanged={refreshTree} />} />
           <Route path="/calendar" element={<CalendarView />} />
           <Route
             path="*"
@@ -173,7 +195,9 @@ export default function App() {
           />
         </Routes>
       </main>
-      {searchOpen && <SearchModal onClose={() => setSearchOpen(false)} />}
+      {searchOpen && <SearchModal tags={tags} onClose={() => setSearchOpen(false)} />}
+      {viewing && <FileViewer file={viewing} onClose={() => setViewing(null)} />}
+      {previewing && <WebPreview url={previewing} onClose={() => setPreviewing(null)} />}
       {trashOpen && <TrashModal onClose={() => setTrashOpen(false)} onChanged={refreshTree} />}
     </div>
   );

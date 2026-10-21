@@ -1,9 +1,8 @@
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { Extension } from '@tiptap/core';
 import { useEditor, EditorContent } from '@tiptap/react';
 import StarterKit from '@tiptap/starter-kit';
 import Link from '@tiptap/extension-link';
-import Image from '@tiptap/extension-image';
 import Placeholder from '@tiptap/extension-placeholder';
 import TaskList from '@tiptap/extension-task-list';
 import TaskItem from '@tiptap/extension-task-item';
@@ -18,6 +17,10 @@ import { Markdown } from 'tiptap-markdown';
 import SlashCommands from './SlashCommands.js';
 import { HeadingFold } from './headingFold.js';
 import TableToolbar from './TableToolbar.jsx';
+import LinkPopover, { linkAt } from './LinkPopover.jsx';
+import { PageLinkSuggest } from './pageLinks.js';
+import { ResizableImage, insertImages } from './imageView.js';
+import { pageIdFromHref, openInNewTab } from '../fileLinks.js';
 import { withMarkdownTables, splitCellBreaks } from '../tableMarkdown.js';
 import { api } from '../api.js';
 
@@ -65,8 +68,9 @@ function splitPastedBreaks(slice, schema) {
 export const baseExtensions = [
   StarterKit.configure({ codeBlock: false }),
   CodeBlockLowlight.configure({ lowlight }),
-  Link.configure({ openOnClick: false, autolink: true }),
-  Image.configure({ allowBase64: false }),
+  // Los enlaces se abren desde la burbuja (clic) o con Ctrl/⌘+clic
+  Link.configure({ openOnClick: false, autolink: true, HTMLAttributes: { rel: 'noopener noreferrer' } }),
+  ResizableImage.configure({ allowBase64: false }),
   TaskList,
   TaskItem.configure({ nested: true }),
   // copiar/exportar sin perder tablas; columnas redimensionables arrastrando el borde
@@ -82,12 +86,19 @@ export const baseExtensions = [
   }),
 ];
 
-export default function Editor({ initialContent, onChange, onFileUploaded, pageId, onReady, onFocusChange }) {
+export default function Editor({ initialContent, onChange, onFileUploaded, pageId, pages = [], onReady, onFocusChange }) {
   const fileInputRef = useRef(null);
   const wrapRef = useRef(null);
-  const [uploads, setUploads] = useState([]); // archivos pegados/arrastrados subiendo ahora
+  const pagesRef = useRef(pages);
+  pagesRef.current = pages;
+  const [uploads, setUploads] = useState([]); // archivos (no imagen) pegados/arrastrados subiendo ahora
+  const [link, setLink] = useState(null); // enlace con la burbuja abierta
 
-  const uploadAndInsert = async (editor, files) => {
+  // Imágenes: se ven al instante en su sitio; el resto de archivos, al terminar la subida
+  const uploadAndInsert = async (editor, all, pos) => {
+    const images = all.filter((f) => f.type.startsWith('image/'));
+    const files = all.filter((f) => !f.type.startsWith('image/'));
+    if (images.length) insertImages(editor, images, pageId, pos, onFileUploaded);
     for (const file of files) {
       const key = `${file.name}-${Math.random().toString(36).slice(2)}`;
       setUploads((u) => [...u, { key, name: file.name, pct: 0 }]);
@@ -96,24 +107,20 @@ export default function Editor({ initialContent, onChange, onFileUploaded, pageI
           setUploads((u) => u.map((it) => (it.key === key ? { ...it, pct: Math.round(frac * 100) } : it)))
         );
         setUploads((u) => u.filter((it) => it.key !== key));
-        if (file.type.startsWith('image/')) {
-          editor.chain().focus().setImage({ src: meta.url, alt: meta.name }).run();
-        } else {
-          editor
-            .chain()
-            .focus()
-            .insertContent({
-              type: 'paragraph',
-              content: [
-                {
-                  type: 'text',
-                  text: `📎 ${meta.name}`,
-                  marks: [{ type: 'link', attrs: { href: meta.url } }],
-                },
-              ],
-            })
-            .run();
-        }
+        editor
+          .chain()
+          .focus()
+          .insertContent({
+            type: 'paragraph',
+            content: [
+              {
+                type: 'text',
+                text: `📎 ${meta.name}`,
+                marks: [{ type: 'link', attrs: { href: meta.url } }],
+              },
+            ],
+          })
+          .run();
         onFileUploaded?.(meta);
       } catch (err) {
         console.error('Error subiendo archivo', err);
@@ -128,6 +135,7 @@ export default function Editor({ initialContent, onChange, onFileUploaded, pageI
       TabHandler,
       SlashCommands,
       HeadingFold.configure({ pageId }),
+      PageLinkSuggest.configure({ getPages: () => pagesRef.current, currentId: pageId }),
       Placeholder.configure({
         placeholder: "Escribe algo, pega Markdown de Claude, o usa '/' para comandos…",
       }),
@@ -142,6 +150,26 @@ export default function Editor({ initialContent, onChange, onFileUploaded, pageI
           uploadAndInsert(editorRef.current, files);
           return true;
         }
+        // Pegar la URL de una página de NoNotion → enlace con su título
+        const text = (event.clipboardData?.getData('text/plain') || '').trim();
+        const linked = /^https?:\/\/\S+$/.test(text) && pageIdFromHref(text);
+        const page = linked && pagesRef.current.find((p) => p.id === linked);
+        if (page && view.state.selection.empty) {
+          event.preventDefault();
+          editorRef.current
+            .chain()
+            .focus()
+            .insertContent([
+              {
+                type: 'text',
+                text: `${page.icon ? page.icon + ' ' : ''}${page.title || 'Sin título'}`,
+                marks: [{ type: 'link', attrs: { href: `/p/${page.id}` } }],
+              },
+              { type: 'text', text: ' ' },
+            ])
+            .run();
+          return true;
+        }
         return false;
       },
       handleDrop: (view, event, slice, moved) => {
@@ -149,10 +177,34 @@ export default function Editor({ initialContent, onChange, onFileUploaded, pageI
         const files = Array.from(event.dataTransfer?.files || []);
         if (files.length > 0) {
           event.preventDefault();
-          uploadAndInsert(editorRef.current, files);
+          // donde se suelta, no donde estaba el cursor
+          const at = view.posAtCoords({ left: event.clientX, top: event.clientY });
+          uploadAndInsert(editorRef.current, files, at?.pos);
           return true;
         }
         return false;
+      },
+      handleDOMEvents: {
+        // Clic en un enlace: burbuja; con Ctrl/⌘, pestaña nueva directamente
+        click: (view, event) => {
+          const l = event.button === 0 && linkAt(view, event);
+          if (!l) return false;
+          if (event.ctrlKey || event.metaKey) {
+            event.preventDefault();
+            openInNewTab(l.href);
+            return true;
+          }
+          setLink(l);
+          return false;
+        },
+        // clic central en un enlace: pestaña nueva
+        auxclick: (view, event) => {
+          const a = event.button === 1 && event.target.closest?.('a[href]');
+          if (!a) return false;
+          event.preventDefault();
+          openInNewTab(a.getAttribute('href'));
+          return true;
+        },
       },
     },
     onUpdate: ({ editor }) => {
@@ -164,6 +216,7 @@ export default function Editor({ initialContent, onChange, onFileUploaded, pageI
 
   const editorRef = useRef(null);
   editorRef.current = editor;
+  const closeLink = useCallback(() => setLink(null), []);
 
   useEffect(() => {
     onReady?.(editor);
@@ -180,6 +233,7 @@ export default function Editor({ initialContent, onChange, onFileUploaded, pageI
       <div className="editor-wrap" ref={wrapRef}>
         <EditorContent editor={editor} className="editor" />
         <TableToolbar editor={editor} containerRef={wrapRef} />
+        <LinkPopover editor={editor} containerRef={wrapRef} pages={pages} link={link} onClose={closeLink} />
       </div>
       {uploads.length > 0 && (
         <ul className="upload-list editor-uploads">
