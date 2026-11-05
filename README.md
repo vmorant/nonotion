@@ -1,6 +1,6 @@
 # NoNotion 🗂️
 
-Webapp autoalojada tipo Notion, **sin límites de capacidad**: tus apuntes, respuestas de IA (Claude) y archivos viven en tu propio LXC de Proxmox, detrás de tu túnel de Cloudflare con Zero Trust.
+Webapp autoalojada tipo Notion, **sin límites de capacidad**: tus apuntes, respuestas de IA (Claude) y archivos viven en tu propio servidor (pensada para un LXC de Proxmox detrás de un túnel de Cloudflare), con login de GitHub y un conector MCP para que Claude lea y escriba directamente.
 
 ## Características
 
@@ -35,8 +35,11 @@ Webapp autoalojada tipo Notion, **sin límites de capacidad**: tus apuntes, resp
 - **Export ZIP completo** — descarga todo el workspace como Markdown + archivos adjuntos con enlaces relativos: backup portable, cero lock-in.
 - **Calendario propio (sin integraciones externas)** — vista mensual y semanal que muestra qué páginas creaste y editaste cada día (registro de actividad interno): de un vistazo ves en qué trabajaste y qué días no. Los datos antiguos se reconstruyen automáticamente desde el historial de versiones.
 - **Reuniones** — asigna una fecha a cualquier página y queda fijada ese día en el calendario (también fechas futuras). El botón "+" de un día crea una página de reunión con plantilla (asistentes, agenda, notas, acciones), y el comando `/reunión` inserta la misma plantilla en cualquier página.
-- **Integración con Cloudflare Access** — la app muestra el usuario autenticado leyendo la cabecera `Cf-Access-Authenticated-User-Email`. No hay login propio: Zero Trust es la puerta.
-- **Autoguardado** — todo se guarda solo mientras escribes.
+- **Claude conectado (MCP)** — Claude (claude.ai, app móvil, Desktop, Claude Code) busca, lee, crea y edita páginas y lee los adjuntos (PDF, Office, Excel, imágenes) sin copiar y pegar. Ver [MCP](#mcp-conecta-claude-a-nonotion).
+- **Sincronización en vivo** — si cambias una página en otro dispositivo, o la cambia Claude, se actualiza sola sin recargar (si estás escribiendo en ella, te avisa en vez de pisarte).
+- **Subidas sin límite de tamaño** — los archivos se suben en trozos reanudables con barra de progreso (Cloudflare corta en 100 MB por petición; así no aplica).
+- **Login con GitHub** — solo entran los usuarios de GitHub que autorices; compatible con Cloudflare Access como segunda capa (o sin él). Ver [Login con GitHub](#login-con-github).
+- **Autoguardado a prueba de cortes** — todo se guarda solo mientras escribes; si se cae la red o se cierra el navegador, nada se pierde (ver [protección contra pérdidas](#copias-de-seguridad-y-protección-contra-pérdidas)).
 
 ## Stack
 
@@ -61,7 +64,7 @@ cd client && npm run dev         # terminal 2: Vite en :5173 con proxy a la API
 
 ## Instalación en el LXC de Proxmox
 
-Recomendado: LXC Debian 12, 1–2 vCPU, 1 GB RAM, y el disco que quieras para tus archivos.
+Recomendado: LXC Debian 12, 2 vCPU, **2 GB de RAM** (LibreOffice convierte los documentos de Office para el visor; con 1 GB funciona, pero los documentos grandes van justos) y el disco que quieras para tus archivos.
 
 ```bash
 # Dentro del contenedor, como root:
@@ -71,7 +74,7 @@ cd /root/nonotion
 bash deploy/install.sh
 ```
 
-El script instala Node 20, compila el frontend, crea el usuario de servicio `nonotion`, instala la app en `/opt/nonotion`, los datos en `/var/lib/nonotion` y deja un servicio systemd arrancado:
+El script instala Node 20, LibreOffice y poppler (visor y lectura de documentos), compila el frontend, crea el usuario de servicio `nonotion`, instala la app en `/opt/nonotion`, los datos en `/var/lib/nonotion`, crea `/etc/nonotion.env` a partir de la plantilla (ver [Login con GitHub](#login-con-github)) y deja un servicio systemd arrancado y comprobado:
 
 ```bash
 systemctl status nonotion
@@ -84,7 +87,7 @@ Para actualizar más adelante:
 cd /root/nonotion && git pull && bash deploy/install.sh
 ```
 
-(Los datos en `/var/lib/nonotion` nunca se tocan.)
+(Los datos en `/var/lib/nonotion` nunca se tocan; antes de cada actualización se guarda una copia de la base de datos en `backups/pre-update/`.)
 
 ## Cloudflare Tunnel (cloudflared)
 
@@ -108,9 +111,9 @@ Y en el dashboard de Cloudflare (Zero Trust → Networks → Tunnels también va
 
 ## Zero Trust (Cloudflare Access)
 
-La app puede apoyarse solo en Zero Trust delante del dominio, o además (o en su lugar) exigir **login con GitHub** (ver más abajo). Si usas Access, asegúrate de tener una aplicación cubriendo `notas.tudominio.com` con tu política habitual (por ejemplo, tu email de Google).
+Opcional si usas el [login con GitHub](#login-con-github) (que ya protege cada ruta); útil como segunda capa. Si usas Access, crea una aplicación cubriendo `notas.tudominio.com` con tu política habitual (por ejemplo, tu email de Google). Sin login de GitHub, la app muestra el usuario de Access leyendo la cabecera `Cf-Access-Authenticated-User-Email`.
 
-La app leerá la cabecera `Cf-Access-Authenticated-User-Email` y mostrará tu usuario abajo a la izquierda.
+> ⚠️ Sin login de GitHub **y** sin Access, cualquiera con la URL entra: configura al menos uno de los dos.
 
 ### Enlaces públicos de compartir
 
@@ -136,7 +139,8 @@ Copia el script `cli/nonotion-send.sh` a tu PC de IA (`~/.local/bin/nonotion-sen
 
 ```bash
 export NONOTION_URL=https://notas.tudominio.com
-# Solo si llamas a través del túnel (recomendado): service token de Access
+export NONOTION_TOKEN=...      # contenido de /var/lib/nonotion/mcp_token (obligatorio con login GitHub)
+# Solo si además tienes Cloudflare Access delante: service token de Access
 export CF_ACCESS_CLIENT_ID=xxxx.access
 export CF_ACCESS_CLIENT_SECRET=yyyy
 ```
@@ -151,7 +155,7 @@ cat respuesta.md | nonotion-send        # o por stdin; el título se deriva del 
 
 La página aparece al instante en "📥 Inbox" (o bajo `NONOTION_PARENT` si lo defines). En Windows, `cli/nonotion-send.ps1` hace lo mismo con `Get-Clipboard`.
 
-Para crear el service token: Zero Trust → Access → Service Auth → Create Service Token, y añade una política **Service Auth** a tu aplicación de Access que lo permita. Si llamas por IP local (LAN), no hace falta nada.
+Si usas Cloudflare Access, crea el service token en Zero Trust → Access → Service Auth → Create Service Token y añade una política **Service Auth** a tu aplicación de Access que lo permita.
 
 ## MCP: conecta Claude a NoNotion
 
@@ -171,7 +175,7 @@ Para rotarlo: borra el archivo y reinicia (`systemctl restart nonotion`).
 
 ### Cloudflare Access
 
-Los clientes MCP no pueden pasar el login de Zero Trust, así que crea una aplicación en Access con política **Bypass** para `notas.tudominio.com/mcp/*` (igual que la de `/share/*`). La protección real es el token de la URL.
+Solo si usas Access: los clientes MCP no pueden pasar el login de Zero Trust, así que crea una aplicación en Access con política **Bypass** para `notas.tudominio.com/mcp/*` (igual que la de `/share/*`). La protección real es el token de la URL. Con el login de GitHub, `/mcp/<token>` ya queda accesible solo con el token.
 
 ### Registrar el conector
 
@@ -186,14 +190,14 @@ Los clientes MCP no pueden pasar el login de Zero Trust, así que crea una aplic
 
 | Herramienta | Qué hace |
 | --- | --- |
-| `search_pages` / `list_pages` | Buscar por texto / ver el árbol completo |
+| `search_pages` / `list_pages` | Buscar por texto y/o etiquetas / ver el árbol completo con etiquetas |
 | `read_page` | Leer una página en Markdown + sus adjuntos |
-| `create_page` | Crear página (Markdown, fecha y emoji opcionales; sin padre → Inbox) |
+| `create_page` | Crear página (Markdown; fecha, emoji y etiquetas opcionales; sin padre → Inbox) |
 | `append_to_page` | Añadir al final sin tocar lo existente (la habitual) |
 | `edit_page` | Sustituir un fragmento exacto del Markdown |
 | `update_page` | Reescribir contenido/título/icono/fecha (queda versión anterior en el historial) |
 | `trash_page` | Mover a la papelera (reversible; no existe borrado definitivo vía MCP) |
-| `read_attachment` | Leer el contenido de un adjunto: extrae texto de PDF/Word/Excel/PowerPoint, muestra imágenes y archivos de texto/código |
+| `read_attachment` | Leer el contenido de un adjunto: texto de PDF/Word/PowerPoint, hojas de Excel/ODS/CSV completas en CSV, imágenes y archivos de texto/código |
 | `read_document_pages` | Renderiza páginas concretas de un PDF/documento como imágenes (escaneados, diagramas, tablas con formato) |
 | `attach_file` | Subir un archivo (código generado, configs…) a una página; rechaza binarios incompletos |
 | `list_tags` / `tag_page` | Ver las etiquetas existentes / añadir o quitar etiquetas de una página |
@@ -227,7 +231,7 @@ En `skills/nonotion/SKILL.md` hay una skill lista para tu Claude: cópiala a `~/
 | GET | `/api/search?q=` | Búsqueda full-text |
 | POST/DELETE | `/api/pages/:id/share` | Activar / desactivar enlace público |
 | GET | `/api/share/:token` | Página compartida (pública) |
-| POST | `/api/capture` | Crear página desde Markdown (`{markdown, title?, parent_id?}`) |
+| POST | `/api/capture` | Crear página desde Markdown (`{markdown, title?, parent_id?, page_date?, icon?, tags?}`) |
 | POST | `/api/pages/:id/move` | Mover en el árbol (`{parent_id, index}`) |
 | POST | `/api/pages/:id/duplicate` | Duplicar subárbol con archivos |
 | GET | `/api/pages/:id/versions` | Historial de versiones |
@@ -239,9 +243,15 @@ En `skills/nonotion/SKILL.md` hay una skill lista para tu Claude: cópiala a `~/
 | GET | `/api/calendar?from=&to=` | Actividad y páginas con fecha por día (YYYY-MM-DD) |
 | GET | `/api/pages/:id/markdown` | Página convertida a Markdown + adjuntos |
 | POST | `/api/pages/:id/append` | Añadir Markdown al final (con snapshot de versión) |
+| POST | `/api/pages/:id/replace` | Sustituir un fragmento exacto del Markdown (`{find, replace}`; 404 si no está, 409 si es ambiguo) |
+| GET | `/files/:id/text` | Texto extraído de un PDF/documento (hojas de cálculo en CSV) |
+| GET | `/files/:id/page/:n` | Página `n` de un PDF/documento como PNG |
+| GET | `/api/events` | Eventos en vivo (Server-Sent Events) cuando cambia el árbol o una página |
+| GET | `/api/me` | Usuario de la sesión y modo de autenticación |
+| GET | `/api/health` | Comprobación de salud (pública) |
 | POST | `/mcp/:token` | Servidor MCP remoto (Streamable HTTP) |
 
-Útil para automatizar: por ejemplo, un script en tu PC de IA puede crear páginas con respuestas de Claude vía `POST /api/pages` + `PUT` con el contenido (las llamadas dentro de la red de Zero Trust pueden usar un [service token de Access](https://developers.cloudflare.com/cloudflare-one/identity/service-tokens/)).
+Para automatizar desde scripts, autentícate con el token de API en la cabecera `Authorization: Bearer <token>` (el mismo de `/var/lib/nonotion/mcp_token`). Si hay Cloudflare Access delante, añade además las cabeceras de un [service token de Access](https://developers.cloudflare.com/cloudflare-one/identity/service-tokens/).
 
 ## Copias de seguridad y protección contra pérdidas
 
@@ -314,5 +324,3 @@ Cómo funciona:
 - Los scripts (`nonotion-send`) usan el token de API: `export NONOTION_TOKEN=$(cat /var/lib/nonotion/mcp_token)`.
 
 Con el login de GitHub activo puedes **quitar Cloudflare Access** del dominio principal (y las reglas Bypass de `/share/*`, `/files/*`, `/assets/*` y `/mcp/*`): la app ya protege cada ruta. O mantener ambos como doble capa.
-
-## API
