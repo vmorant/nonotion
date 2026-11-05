@@ -1,4 +1,5 @@
 import Database from 'better-sqlite3';
+import crypto from 'crypto';
 import fs from 'fs';
 import path from 'path';
 
@@ -131,6 +132,134 @@ CREATE TABLE IF NOT EXISTS sessions (
   expires_at TEXT NOT NULL
 );
 `);
+
+// ---------- Espacios de trabajo (varios proyectos en la misma instancia) ----------
+// Cada página, archivo, subida y etiqueta pertenece a un espacio. Los usuarios de
+// AUTH_ALLOWED_GITHUB_USERS son propietarios de la instancia y ven todos; el
+// resto entra solo en los espacios donde es miembro.
+db.exec(`
+CREATE TABLE IF NOT EXISTS workspaces (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  icon TEXT NOT NULL DEFAULT '🗂️',
+  position INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE TABLE IF NOT EXISTS workspace_members (
+  workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+  github_login TEXT NOT NULL COLLATE NOCASE,
+  role TEXT NOT NULL DEFAULT 'editor',
+  added_at TEXT NOT NULL DEFAULT (datetime('now')),
+  PRIMARY KEY (workspace_id, github_login)
+);
+-- Tokens del conector de Claude / scripts: cada uno da acceso a UN espacio
+CREATE TABLE IF NOT EXISTS api_tokens (
+  token TEXT PRIMARY KEY,
+  workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+  github_login TEXT COLLATE NOCASE,
+  label TEXT,
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  last_used_at TEXT
+);
+-- Favoritas por persona
+CREATE TABLE IF NOT EXISTS favorites (
+  github_login TEXT NOT NULL COLLATE NOCASE,
+  page_id TEXT NOT NULL REFERENCES pages(id) ON DELETE CASCADE,
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  PRIMARY KEY (github_login, page_id)
+);
+`);
+
+export const instanceOwners = () =>
+  (process.env.AUTH_ALLOWED_GITHUB_USERS || '')
+    .split(',')
+    .map((s) => s.trim().toLowerCase())
+    .filter(Boolean);
+
+let defaultWs = db.prepare('SELECT id FROM workspaces ORDER BY position, created_at LIMIT 1').get()?.id;
+if (!defaultWs) {
+  defaultWs = 'ws_' + crypto.randomBytes(6).toString('hex');
+  db.prepare('INSERT INTO workspaces (id, name, icon, position) VALUES (?, ?, ?, 0)').run(
+    defaultWs,
+    (process.env.DEFAULT_WORKSPACE_NAME || 'Principal').trim() || 'Principal',
+    '🗂️'
+  );
+}
+
+const colsOf = (table) => db.prepare(`PRAGMA table_info(${table})`).all().map((c) => c.name);
+for (const table of ['pages', 'files', 'uploads']) {
+  if (!colsOf(table).includes('workspace_id')) {
+    db.exec(`ALTER TABLE ${table} ADD COLUMN workspace_id TEXT`);
+  }
+}
+db.exec(`
+CREATE INDEX IF NOT EXISTS idx_pages_ws ON pages(workspace_id);
+CREATE INDEX IF NOT EXISTS idx_files_ws ON files(workspace_id);
+`);
+// Lo existente pasa al espacio inicial; los archivos y subidas, al de su página
+db.prepare('UPDATE pages SET workspace_id = ? WHERE workspace_id IS NULL').run(defaultWs);
+db.prepare(
+  `UPDATE files SET workspace_id = COALESCE((SELECT workspace_id FROM pages WHERE pages.id = files.page_id), ?)
+   WHERE workspace_id IS NULL`
+).run(defaultWs);
+db.prepare(
+  `UPDATE uploads SET workspace_id = COALESCE((SELECT workspace_id FROM pages WHERE pages.id = uploads.page_id), ?)
+   WHERE workspace_id IS NULL`
+).run(defaultWs);
+
+// Favoritas: de la columna global a favoritas por persona (las de los propietarios)
+if (colsOf('pages').includes('favorite_at')) {
+  const owners = instanceOwners();
+  const logins = owners.length ? owners : ['local'];
+  const ins = db.prepare('INSERT OR IGNORE INTO favorites (github_login, page_id, created_at) VALUES (?, ?, ?)');
+  db.transaction(() => {
+    for (const f of db.prepare('SELECT id, favorite_at FROM pages WHERE favorite_at IS NOT NULL').all()) {
+      for (const login of logins) ins.run(login, f.id, f.favorite_at);
+    }
+    db.prepare('UPDATE pages SET favorite_at = NULL WHERE favorite_at IS NOT NULL').run();
+  })();
+}
+
+// Etiquetas por espacio: se reconstruyen las tablas con workspace_id
+if (!colsOf('tags').includes('workspace_id')) {
+  db.pragma('foreign_keys = OFF');
+  db.transaction(() => {
+    db.exec(`
+      CREATE TABLE tags_new (
+        workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+        name TEXT NOT NULL COLLATE NOCASE,
+        color TEXT NOT NULL DEFAULT 'gray',
+        created_at TEXT NOT NULL DEFAULT (datetime('now')),
+        PRIMARY KEY (workspace_id, name)
+      );
+      CREATE TABLE page_tags_new (
+        page_id TEXT NOT NULL REFERENCES pages(id) ON DELETE CASCADE,
+        workspace_id TEXT NOT NULL,
+        tag TEXT NOT NULL COLLATE NOCASE,
+        PRIMARY KEY (page_id, tag),
+        FOREIGN KEY (workspace_id, tag) REFERENCES tags_new(workspace_id, name) ON DELETE CASCADE ON UPDATE CASCADE
+      );
+    `);
+    db.prepare('INSERT INTO tags_new (workspace_id, name, color, created_at) SELECT ?, name, color, created_at FROM tags').run(defaultWs);
+    db.exec(`
+      INSERT INTO page_tags_new (page_id, workspace_id, tag)
+        SELECT pt.page_id, p.workspace_id, pt.tag FROM page_tags pt JOIN pages p ON p.id = pt.page_id;
+      -- una etiqueta usada en páginas de otro espacio (no ocurre al migrar, pero por si acaso)
+      INSERT OR IGNORE INTO tags_new (workspace_id, name, color)
+        SELECT DISTINCT workspace_id, tag, 'gray' FROM page_tags_new;
+      DROP TABLE page_tags;
+      DROP TABLE tags;
+      ALTER TABLE tags_new RENAME TO tags;
+      ALTER TABLE page_tags_new RENAME TO page_tags;
+      CREATE INDEX IF NOT EXISTS idx_page_tags_tag ON page_tags(workspace_id, tag);
+    `);
+    const broken = db.pragma('foreign_key_check');
+    if (broken.length) throw new Error(`Migración de etiquetas: ${broken.length} referencias rotas`);
+  })();
+  db.pragma('foreign_keys = ON');
+}
+
+export const DEFAULT_WORKSPACE = defaultWs;
 
 // Backfill inicial: reconstruye actividad pasada desde el historial de
 // versiones y la última modificación de cada página

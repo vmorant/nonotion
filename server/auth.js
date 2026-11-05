@@ -9,9 +9,14 @@
 //   - /mcp/<token>            (el conector de Claude, protegido por su token)
 //   - /share/*, /api/share/*  (enlaces públicos de solo lectura)
 //   - /files/<id> de páginas compartidas
-//   - peticiones con "Authorization: Bearer <token MCP>" (scripts CLI y el propio MCP)
+//   - peticiones con "Authorization: Bearer <token>" (scripts CLI y el propio MCP);
+//     cada token da acceso a un único espacio
+//
+// Pueden entrar los propietarios (AUTH_ALLOWED_GITHUB_USERS) y los miembros de
+// algún espacio (se añaden desde la app, sin reiniciar).
 import crypto from 'crypto';
 import db from './db.js';
+import { loginAllowed, lookupToken, setAuthMode } from './workspaces.js';
 
 const SESSION_DAYS = 30;
 const SESSION_COOKIE = 'nn_session';
@@ -125,11 +130,12 @@ function loginPage({ next, error }) {
 </main></body></html>`;
 }
 
-export function setupAuth(app, { apiToken }) {
+export function setupAuth(app) {
   const cfg = authConfig();
+  setAuthMode(cfg.mode);
   const secure = cfg.publicUrl.startsWith('https://');
   if (cfg.mode === 'github') {
-    console.log(`Login con GitHub activo (${cfg.allowed.length} usuario/s permitido/s)`);
+    console.log(`Login con GitHub activo (${cfg.allowed.length} propietario/s; más los miembros de cada espacio)`);
   } else if (cfg.mode === 'misconfigured') {
     console.error(
       'Login con GitHub A MEDIAS: faltan GITHUB_CLIENT_ID, GITHUB_CLIENT_SECRET, AUTH_ALLOWED_GITHUB_USERS o PUBLIC_URL. Acceso bloqueado hasta completarlo.'
@@ -153,10 +159,15 @@ export function setupAuth(app, { apiToken }) {
     req.user = null;
     req.authKind = null;
     const header = req.headers.authorization || '';
-    if (apiToken && header.startsWith('Bearer ') && safeEqual(header.slice(7).trim(), apiToken)) {
-      req.user = { login: 'api-token' };
-      req.authKind = 'token';
-      return next();
+    if (header.startsWith('Bearer ')) {
+      const t = lookupToken(header.slice(7).trim());
+      if (t) {
+        req.user = { login: t.github_login || 'api-token' };
+        req.authKind = 'token';
+        req.tokenWs = t.workspace_id;
+        req.tokenLogin = t.github_login || null;
+      }
+      return next(); // un Bearer inválido no cuenta como sesión
     }
     if (cfg.mode !== 'github') return next();
     const sid = parseCookies(req.headers.cookie)[SESSION_COOKIE];
@@ -164,8 +175,8 @@ export function setupAuth(app, { apiToken }) {
     const row = db
       .prepare(`SELECT * FROM sessions WHERE id = ? AND expires_at > datetime('now')`)
       .get(sha256(sid));
-    // Quitar a alguien de AUTH_ALLOWED_GITHUB_USERS le corta el acceso al reiniciar
-    if (row && cfg.allowed.includes(row.github_login.toLowerCase())) {
+    // Quitar a alguien (de los propietarios o de todos sus espacios) le corta el acceso
+    if (row && loginAllowed(row.github_login)) {
       req.user = { login: row.github_login, name: row.name, avatar_url: row.avatar_url };
       req.authKind = 'session';
       // Sesión deslizante: renovamos como mucho una vez por hora
@@ -244,7 +255,7 @@ export function setupAuth(app, { apiToken }) {
       const u = await userRes.json();
       // El token de GitHub no se guarda: solo sirve para saber quién eres
 
-      if (!u.login || !cfg.allowed.includes(String(u.login).toLowerCase())) {
+      if (!u.login || !loginAllowed(u.login)) {
         console.warn(`Login denegado para la cuenta de GitHub "${u.login}"`);
         res.setHeader('Set-Cookie', clearState);
         return res.redirect('/login?error=denied');

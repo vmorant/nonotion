@@ -4,6 +4,28 @@ export const CLIENT_ID =
   (typeof crypto !== 'undefined' && crypto.randomUUID && crypto.randomUUID()) ||
   Math.random().toString(36).slice(2);
 
+// ---------- Espacio actual ----------
+// Todas las peticiones llevan el espacio en el que estás (X-Workspace); el
+// servidor comprueba que tienes acceso y limita a él listados y búsquedas.
+let currentWs = null;
+export const setCurrentWorkspace = (id) => {
+  currentWs = id;
+};
+export const getCurrentWorkspace = () => currentWs;
+const WS_KEY = 'nn:ws';
+export function readStoredWorkspace() {
+  try {
+    return localStorage.getItem(WS_KEY);
+  } catch {
+    return null;
+  }
+}
+export function storeWorkspace(id) {
+  try {
+    localStorage.setItem(WS_KEY, id);
+  } catch {}
+}
+
 // ---------- Trabajo sin guardar ----------
 // Cualquier parte de la app (autoguardado, subidas) se apunta aquí mientras
 // tenga algo pendiente; al cerrar la pestaña el navegador avisa si hay algo.
@@ -26,7 +48,7 @@ export class ApiError extends Error {
 }
 
 async function req(url, options = {}) {
-  const headers = { 'X-Client-Id': CLIENT_ID, ...(options.headers || {}) };
+  const headers = { 'X-Client-Id': CLIENT_ID, ...(currentWs ? { 'X-Workspace': currentWs } : {}), ...(options.headers || {}) };
   if (!(options.body instanceof FormData) && !headers['Content-Type']) {
     headers['Content-Type'] = 'application/json';
   }
@@ -51,6 +73,7 @@ function putChunk(id, offset, blob, onChunkProgress) {
     xhr.open('PUT', `/api/uploads/${id}?offset=${offset}`);
     xhr.setRequestHeader('Content-Type', 'application/octet-stream');
     xhr.setRequestHeader('X-Client-Id', CLIENT_ID);
+    if (currentWs) xhr.setRequestHeader('X-Workspace', currentWs);
     xhr.upload.onprogress = (e) => onChunkProgress?.(e.loaded);
     xhr.onload = () => {
       let json = {};
@@ -164,6 +187,20 @@ export const api = {
   version: (vid) => req(`/api/versions/${vid}`),
   restoreVersion: (pageId, vid) => req(`/api/pages/${pageId}/restore-version/${vid}`, { method: 'POST' }),
   logout: () => req('/auth/logout', { method: 'POST', headers: { Accept: 'application/json' } }),
+  // Espacios, miembros y conectores de Claude
+  workspaces: () => req('/api/workspaces'),
+  createWorkspace: (data) => req('/api/workspaces', { method: 'POST', body: JSON.stringify(data) }),
+  updateWorkspace: (id, data) => req(`/api/workspaces/${id}`, { method: 'PATCH', body: JSON.stringify(data) }),
+  deleteWorkspace: (id) => req(`/api/workspaces/${id}`, { method: 'DELETE' }),
+  members: (id) => req(`/api/workspaces/${id}/members`),
+  setMember: (id, login, role) =>
+    req(`/api/workspaces/${id}/members/${encodeURIComponent(login)}`, { method: 'PUT', body: JSON.stringify({ role }) }),
+  removeMember: (id, login) => req(`/api/workspaces/${id}/members/${encodeURIComponent(login)}`, { method: 'DELETE' }),
+  tokens: (id) => req(`/api/workspaces/${id}/tokens`),
+  createToken: (id, label) => req(`/api/workspaces/${id}/tokens`, { method: 'POST', body: JSON.stringify({ label }) }),
+  revokeToken: (id, prefix) => req(`/api/workspaces/${id}/tokens/${encodeURIComponent(prefix)}`, { method: 'DELETE' }),
+  exportUrl: () => `/api/export${currentWs ? `?ws=${encodeURIComponent(currentWs)}` : ''}`,
+  eventsUrl: () => `/api/events?client=${encodeURIComponent(CLIENT_ID)}${currentWs ? `&ws=${encodeURIComponent(currentWs)}` : ''}`,
   // Todas las subidas van por trozos (sin límite de tamaño, reanudables)
   uploadFile: (file, pageId, onProgress) => uploadChunked(file, pageId, onProgress),
   uploadFileProgress: (file, pageId, onProgress) => uploadChunked(file, pageId, onProgress),

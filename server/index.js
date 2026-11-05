@@ -12,6 +12,7 @@ import { docToMarkdown, markdownToDoc, appendMarkdown, replaceInDoc, EditError }
 import { mountMcp, getOrCreateToken } from './mcp.js';
 import { setupAuth, purgeExpiredSessions } from './auth.js';
 import { mountTags, tagsOf, setPageTags, copyTags, pagesWithTags, TAGS_COLUMN, splitTags } from './tags.js';
+import { workspaceGuard, mountWorkspaces, pageInWs, adoptLegacyToken, loginOf } from './workspaces.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PORT = process.env.PORT || 3000;
@@ -26,8 +27,11 @@ const app = express();
 app.disable('x-powered-by');
 app.use(express.json({ limit: '100mb' }));
 
-// Login con GitHub + token de API. Va antes que cualquier ruta.
-const authCfg = setupAuth(app, { apiToken: getOrCreateToken() });
+// Login con GitHub + tokens de API. Va antes que cualquier ruta.
+adoptLegacyToken(getOrCreateToken());
+const authCfg = setupAuth(app);
+// Espacios: cada petición queda limitada a los espacios de su usuario/token
+app.use(workspaceGuard);
 
 app.get('/api/health', (req, res) => res.json({ ok: true }));
 
@@ -42,11 +46,13 @@ const upload = multer({
 // Cada navegador abre /api/events; cuando algo cambia, le avisamos para que se
 // actualice sin recargar. El cambio lo puede provocar otra persona o el MCP.
 
-const sseClients = new Set(); // { res, client }
+const sseClients = new Set(); // { res, client, ws }
 
-function broadcast(event, originId) {
+// Solo a los navegadores que están en ese espacio (ws null: aviso para todos, sin datos)
+function broadcast(event, originId, ws) {
   const data = `data: ${JSON.stringify(event)}\n\n`;
   for (const c of sseClients) {
+    if (ws && c.ws !== ws) continue;
     if (originId && c.client === originId) continue; // no devolver al autor su propio cambio
     try {
       c.res.write(data);
@@ -54,8 +60,9 @@ function broadcast(event, originId) {
   }
 }
 
-const notifyTree = (req) => broadcast({ type: 'tree' }, req?.headers?.['x-client-id']);
-const notifyPage = (req, id) => broadcast({ type: 'page', id }, req?.headers?.['x-client-id']);
+const notifyTree = (req) => req.ws && broadcast({ type: 'tree' }, req.headers['x-client-id'], req.ws);
+const notifyPage = (req, id) => req.ws && broadcast({ type: 'page', id }, req.headers['x-client-id'], req.ws);
+const notifyAll = () => broadcast({ type: 'workspaces' }, null, null);
 
 function subtreeIds(rootId) {
   return db
@@ -100,7 +107,7 @@ app.get('/api/events', (req, res) => {
   });
   res.flushHeaders?.();
   res.write('retry: 3000\n\n');
-  const entry = { res, client: req.query.client || null };
+  const entry = { res, client: req.query.client || null, ws: req.ws };
   sseClients.add(entry);
   const keepalive = setInterval(() => {
     try {
@@ -123,16 +130,19 @@ app.get('/api/me', (req, res) => {
   });
 });
 
+mountWorkspaces(app, { notifyAll });
+
 // ---------- Páginas ----------
 
 app.get('/api/pages', (req, res) => {
   const rows = db
     .prepare(
       `SELECT id, parent_id, title, icon, position, updated_at, page_date,
-              share_token IS NOT NULL AS shared, favorite_at, full_width, ${TAGS_COLUMN}
-       FROM pages WHERE trashed_at IS NULL ORDER BY position, created_at`
+              share_token IS NOT NULL AS shared, full_width, ${TAGS_COLUMN},
+              (SELECT created_at FROM favorites f WHERE f.page_id = pages.id AND f.github_login = ?) AS favorite_at
+       FROM pages WHERE trashed_at IS NULL AND workspace_id = ? ORDER BY position, created_at`
     )
-    .all();
+    .all(loginOf(req) || '', req.ws);
   res.json(rows.map((r) => ({ ...r, tags: splitTags(r.tags) })));
 });
 
@@ -140,15 +150,16 @@ const validDate = (v) => (typeof v === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(v)
 
 app.post('/api/pages', (req, res) => {
   const { parent_id = null, title = '', icon = '', content = null, page_date = null } = req.body || {};
+  if (parent_id && !pageInWs(parent_id, req.ws)) return res.status(400).json({ error: 'Padre inexistente' });
   const id = nanoid(12);
   const pos = db
-    .prepare('SELECT COALESCE(MAX(position) + 1, 0) AS p FROM pages WHERE parent_id IS ?')
-    .get(parent_id).p;
+    .prepare('SELECT COALESCE(MAX(position) + 1, 0) AS p FROM pages WHERE parent_id IS ? AND workspace_id = ?')
+    .get(parent_id, req.ws).p;
   // content opcional como string: markdown crudo (mismo mecanismo que /api/capture)
   const raw = typeof content === 'string' ? content : '';
   db.prepare(
-    'INSERT INTO pages (id, parent_id, title, icon, content, content_text, position, page_date) VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
-  ).run(id, parent_id, title, icon, raw, raw, pos, validDate(page_date));
+    'INSERT INTO pages (id, parent_id, title, icon, content, content_text, position, page_date, workspace_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)'
+  ).run(id, parent_id, title, icon, raw, raw, pos, validDate(page_date), req.ws);
   ftsUpsert(id, title, raw);
   notifyTree(req);
   res.json(db.prepare('SELECT * FROM pages WHERE id = ?').get(id));
@@ -161,6 +172,10 @@ app.get('/api/pages/:id', (req, res) => {
     .prepare('SELECT id, name, mime, size, created_at FROM files WHERE page_id = ? AND deleted_at IS NULL ORDER BY created_at')
     .all(page.id);
   page.tags = tagsOf(page.id);
+  // favorita de quien pregunta (la columna antigua de pages ya no se usa)
+  page.favorite_at =
+    db.prepare('SELECT created_at FROM favorites WHERE github_login = ? AND page_id = ?').get(loginOf(req) || '', page.id)
+      ?.created_at ?? null;
   res.json(page);
 });
 
@@ -171,10 +186,10 @@ app.get('/api/pages/:id/backlinks', (req, res) => {
   const rows = db
     .prepare(
       `SELECT id, title, icon FROM pages
-       WHERE trashed_at IS NULL AND id != ? AND instr(content, '/p/' || ?) > 0
+       WHERE trashed_at IS NULL AND workspace_id = ? AND id != ? AND instr(content, '/p/' || ?) > 0
        ORDER BY updated_at DESC LIMIT 100`
     )
-    .all(req.params.id, req.params.id)
+    .all(req.ws, req.params.id, req.params.id)
     .filter((p) => {
       // instr no distingue un id que sea prefijo de otro
       return exact.test(db.prepare('SELECT content FROM pages WHERE id = ?').get(p.id).content);
@@ -222,8 +237,7 @@ app.put('/api/pages/:id', (req, res) => {
       if (b.parent_id === page.id || isDescendant(b.parent_id, page.id)) {
         return res.status(400).json({ error: 'Movimiento inválido: crearía un ciclo' });
       }
-      const parent = db.prepare('SELECT id FROM pages WHERE id = ?').get(b.parent_id);
-      if (!parent) return res.status(400).json({ error: 'Padre inexistente' });
+      if (!pageInWs(b.parent_id, page.workspace_id)) return res.status(400).json({ error: 'Padre inexistente' });
     }
     fields.parent_id = b.parent_id;
   }
@@ -269,16 +283,21 @@ app.post('/api/pages/:id/prefs', (req, res) => {
   const page = db.prepare('SELECT id FROM pages WHERE id = ?').get(req.params.id);
   if (!page) return res.status(404).json({ error: 'Página no encontrada' });
   const b = req.body || {};
-  if (typeof b.favorite === 'boolean') {
-    db.prepare(
-      `UPDATE pages SET favorite_at = CASE WHEN ? THEN COALESCE(favorite_at, datetime('now')) ELSE NULL END WHERE id = ?`
-    ).run(b.favorite ? 1 : 0, page.id);
+  // Favorita: de cada persona
+  const login = loginOf(req);
+  if (typeof b.favorite === 'boolean' && login) {
+    if (b.favorite) db.prepare('INSERT OR IGNORE INTO favorites (github_login, page_id) VALUES (?, ?)').run(login, page.id);
+    else db.prepare('DELETE FROM favorites WHERE github_login = ? AND page_id = ?').run(login, page.id);
   }
   if (typeof b.full_width === 'boolean') {
     db.prepare('UPDATE pages SET full_width = ? WHERE id = ?').run(b.full_width ? 1 : 0, page.id);
   }
   notifyTree(req);
-  res.json(db.prepare('SELECT id, favorite_at, full_width FROM pages WHERE id = ?').get(page.id));
+  res.json({
+    ...db.prepare('SELECT id, full_width FROM pages WHERE id = ?').get(page.id),
+    favorite_at: db.prepare('SELECT created_at FROM favorites WHERE github_login = ? AND page_id = ?').get(login || '', page.id)
+      ?.created_at ?? null,
+  });
 });
 
 // Mover en el árbol: nuevo padre + posición exacta entre hermanos
@@ -290,17 +309,17 @@ app.post('/api/pages/:id/move', (req, res) => {
     if (parent_id === page.id || isDescendant(parent_id, page.id)) {
       return res.status(400).json({ error: 'Movimiento inválido: crearía un ciclo' });
     }
-    if (!db.prepare('SELECT id FROM pages WHERE id = ?').get(parent_id)) {
+    if (!pageInWs(parent_id, page.workspace_id)) {
       return res.status(400).json({ error: 'Padre inexistente' });
     }
   }
   db.transaction(() => {
     const siblings = db
       .prepare(
-        `SELECT id FROM pages WHERE parent_id IS ? AND trashed_at IS NULL AND id != ?
+        `SELECT id FROM pages WHERE parent_id IS ? AND workspace_id = ? AND trashed_at IS NULL AND id != ?
          ORDER BY position, created_at`
       )
-      .all(parent_id, page.id)
+      .all(parent_id, page.workspace_id, page.id)
       .map((r) => r.id);
     const at = Math.max(0, Math.min(index, siblings.length));
     siblings.splice(at, 0, page.id);
@@ -321,10 +340,10 @@ app.post('/api/pages/:id/duplicate', (req, res) => {
   if (!orig) return res.status(404).json({ error: 'Página no encontrada' });
 
   const insertPage = db.prepare(
-    `INSERT INTO pages (id, parent_id, title, icon, content, content_text, position)
-     VALUES (?, ?, ?, ?, ?, ?, ?)`
+    `INSERT INTO pages (id, parent_id, title, icon, content, content_text, position, workspace_id)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
   );
-  const insertFile = db.prepare('INSERT INTO files (id, page_id, name, mime, size) VALUES (?, ?, ?, ?, ?)');
+  const insertFile = db.prepare('INSERT INTO files (id, page_id, name, mime, size, workspace_id) VALUES (?, ?, ?, ?, ?, ?)');
 
   const clone = (srcId, newParentId, titleOverride, position) => {
     const src = db.prepare('SELECT * FROM pages WHERE id = ?').get(srcId);
@@ -336,7 +355,8 @@ app.post('/api/pages/:id/duplicate', (req, res) => {
       src.icon,
       src.content,
       src.content_text,
-      position ?? src.position
+      position ?? src.position,
+      src.workspace_id
     );
     let content = src.content;
     const files = db.prepare('SELECT * FROM files WHERE page_id = ? AND deleted_at IS NULL').all(srcId);
@@ -347,7 +367,7 @@ app.post('/api/pages/:id/duplicate', (req, res) => {
       } catch {
         continue;
       }
-      insertFile.run(newFileId, newId, f.name, f.mime, f.size);
+      insertFile.run(newFileId, newId, f.name, f.mime, f.size, src.workspace_id);
       content = content.split(`/files/${f.id}/`).join(`/files/${newFileId}/`);
     }
     if (content !== src.content) {
@@ -392,11 +412,11 @@ app.get('/api/trash', (req, res) => {
               (SELECT COUNT(*) FROM pages c WHERE c.parent_id = t.id AND c.trashed_at IS NOT NULL) AS children
        FROM pages t
        LEFT JOIN pages parent ON parent.id = t.parent_id
-       WHERE t.trashed_at IS NOT NULL
+       WHERE t.trashed_at IS NOT NULL AND t.workspace_id = ?
          AND (t.parent_id IS NULL OR parent.id IS NULL OR parent.trashed_at IS NULL)
        ORDER BY t.trashed_at DESC`
     )
-    .all();
+    .all(req.ws);
   res.json(rows);
 });
 
@@ -434,12 +454,13 @@ app.delete('/api/trash', (req, res) => {
     .prepare(
       `SELECT t.id FROM pages t
        LEFT JOIN pages parent ON parent.id = t.parent_id
-       WHERE t.trashed_at IS NOT NULL AND (t.parent_id IS NULL OR parent.id IS NULL OR parent.trashed_at IS NULL)`
+       WHERE t.trashed_at IS NOT NULL AND t.workspace_id = ?
+         AND (t.parent_id IS NULL OR parent.id IS NULL OR parent.trashed_at IS NULL)`
     )
-    .all();
+    .all(req.ws);
   let deleted = 0;
   for (const r of roots) deleted += permanentDelete(r.id);
-  const deletedFiles = db.prepare('SELECT id FROM files WHERE deleted_at IS NOT NULL').all();
+  const deletedFiles = db.prepare('SELECT id FROM files WHERE deleted_at IS NOT NULL AND workspace_id = ?').all(req.ws);
   for (const f of deletedFiles) purgeFile(f.id);
   notifyTree(req);
   res.json({ ok: true, deleted, files: deletedFiles.length });
@@ -460,7 +481,7 @@ app.get('/api/trash/files', (req, res) => {
     .prepare(
       `SELECT f.id, f.name, f.mime, f.size, f.deleted_at, f.page_id, p.title AS page_title, p.icon AS page_icon
        FROM files f LEFT JOIN pages p ON p.id = f.page_id
-       WHERE f.deleted_at IS NOT NULL ORDER BY f.deleted_at DESC`
+       WHERE f.deleted_at IS NOT NULL AND f.workspace_id = ? ORDER BY f.deleted_at DESC`
     )
     .all();
   res.json(rows);
@@ -542,23 +563,23 @@ app.get('/api/calendar', (req, res) => {
   const dated = db
     .prepare(
       `SELECT id, title, icon, page_date AS day FROM pages
-       WHERE trashed_at IS NULL AND page_date BETWEEN ? AND ?`
+       WHERE trashed_at IS NULL AND workspace_id = ? AND page_date BETWEEN ? AND ?`
     )
-    .all(from, to);
+    .all(req.ws, from, to);
   const created = db
     .prepare(
       `SELECT id, title, icon, date(created_at, 'localtime') AS day FROM pages
-       WHERE trashed_at IS NULL AND date(created_at, 'localtime') BETWEEN ? AND ?`
+       WHERE trashed_at IS NULL AND workspace_id = ? AND date(created_at, 'localtime') BETWEEN ? AND ?`
     )
-    .all(from, to);
+    .all(req.ws, from, to);
   const edited = db
     .prepare(
       `SELECT p.id, p.title, p.icon, a.day, a.edits FROM activity a
        JOIN pages p ON p.id = a.page_id
-       WHERE p.trashed_at IS NULL AND a.day BETWEEN ? AND ?
+       WHERE p.trashed_at IS NULL AND p.workspace_id = ? AND a.day BETWEEN ? AND ?
          AND a.day != date(p.created_at, 'localtime')`
     )
-    .all(from, to);
+    .all(req.ws, from, to);
   res.json({ dated, created, edited });
 });
 
@@ -571,13 +592,16 @@ function deriveTitle(markdown) {
   return title.length > 80 ? title.slice(0, 77) + '…' : title || 'Captura';
 }
 
-function getOrCreateInbox() {
+// Cada espacio tiene su propio Inbox
+function getOrCreateInbox(ws) {
   const inbox = db
-    .prepare(`SELECT id FROM pages WHERE parent_id IS NULL AND title = 'Inbox' AND trashed_at IS NULL`)
-    .get();
+    .prepare(`SELECT id FROM pages WHERE parent_id IS NULL AND title = 'Inbox' AND trashed_at IS NULL AND workspace_id = ?`)
+    .get(ws);
   if (inbox) return inbox.id;
   const id = nanoid(12);
-  db.prepare(`INSERT INTO pages (id, parent_id, title, icon, position) VALUES (?, NULL, 'Inbox', '📥', -1)`).run(id);
+  db.prepare(
+    `INSERT INTO pages (id, parent_id, title, icon, position, workspace_id) VALUES (?, NULL, 'Inbox', '📥', -1, ?)`
+  ).run(id, ws);
   ftsUpsert(id, 'Inbox', '');
   return id;
 }
@@ -588,10 +612,10 @@ app.post('/api/capture', async (req, res) => {
     return res.status(400).json({ error: 'Falta el campo "markdown"' });
   }
   let parentId = parent_id || null;
-  if (parentId && !db.prepare('SELECT id FROM pages WHERE id = ?').get(parentId)) {
+  if (parentId && !pageInWs(parentId, req.ws)) {
     return res.status(400).json({ error: 'Padre inexistente' });
   }
-  if (!parentId) parentId = getOrCreateInbox();
+  if (!parentId) parentId = getOrCreateInbox(req.ws);
 
   // Se guarda ya como documento (igual que si se hubiera pegado en el editor)
   let content = markdown;
@@ -610,10 +634,10 @@ app.post('/api/capture', async (req, res) => {
     .prepare('SELECT COALESCE(MAX(position) + 1, 0) AS p FROM pages WHERE parent_id IS ?')
     .get(parentId).p;
   db.prepare(
-    'INSERT INTO pages (id, parent_id, title, icon, content, content_text, position, page_date) VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
-  ).run(id, parentId, pageTitle, typeof icon === 'string' && icon ? icon : '🤖', content, text, pos, validDate(page_date));
+    'INSERT INTO pages (id, parent_id, title, icon, content, content_text, position, page_date, workspace_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)'
+  ).run(id, parentId, pageTitle, typeof icon === 'string' && icon ? icon : '🤖', content, text, pos, validDate(page_date), req.ws);
   ftsUpsert(id, pageTitle, text);
-  const pageTags = Array.isArray(tags) && tags.length ? setPageTags(id, tags) : [];
+  const pageTags = Array.isArray(tags) && tags.length ? setPageTags(id, req.ws, tags) : [];
   notifyTree(req);
   res.json({ id, title: pageTitle, url: `/p/${id}`, tags: pageTags });
 });
@@ -715,15 +739,23 @@ app.post('/api/files', upload.single('file'), (req, res) => {
   if (!req.file) return res.status(400).json({ error: 'Falta el archivo' });
   const pageId = req.body.page_id || null;
   const f = req.file;
+  // La página debe ser del espacio de la petición (multer ya guardó el archivo: se borra)
+  if (pageId && !pageInWs(pageId, req.ws)) {
+    try {
+      fs.unlinkSync(path.join(FILES_DIR, f.filename));
+    } catch {}
+    return res.status(400).json({ error: 'Página inexistente' });
+  }
   // multer no decodifica UTF-8 en originalname (llega como latin1)
   const name = Buffer.from(f.originalname, 'latin1').toString('utf8');
   const mime = inferMime(name, f.mimetype);
-  db.prepare('INSERT INTO files (id, page_id, name, mime, size) VALUES (?, ?, ?, ?, ?)').run(
+  db.prepare('INSERT INTO files (id, page_id, name, mime, size, workspace_id) VALUES (?, ?, ?, ?, ?, ?)').run(
     f.filename,
     pageId,
     name,
     mime,
-    f.size
+    f.size,
+    req.ws
   );
   if (pageId) notifyPage(req, pageId);
   res.json({
@@ -772,17 +804,18 @@ app.post('/api/uploads', (req, res) => {
   const { name, size, mime, page_id } = req.body || {};
   if (typeof name !== 'string' || !name.trim()) return res.status(400).json({ error: 'Falta el nombre' });
   if (!Number.isSafeInteger(size) || size < 0) return res.status(400).json({ error: 'Tamaño inválido' });
-  if (page_id && !db.prepare('SELECT id FROM pages WHERE id = ?').get(page_id)) {
+  if (page_id && !pageInWs(page_id, req.ws)) {
     return res.status(400).json({ error: 'Página inexistente' });
   }
   const id = nanoid(21);
   fs.writeFileSync(uploadPartPath(id), '');
-  db.prepare('INSERT INTO uploads (id, page_id, name, mime, size) VALUES (?, ?, ?, ?, ?)').run(
+  db.prepare('INSERT INTO uploads (id, page_id, name, mime, size, workspace_id) VALUES (?, ?, ?, ?, ?, ?)').run(
     id,
     page_id || null,
     name,
     inferMime(name, mime),
-    size
+    size,
+    req.ws
   );
   res.json({ id, chunk_size: CHUNK_SIZE, received: 0 });
 });
@@ -822,18 +855,19 @@ app.post('/api/uploads/:id/complete', (req, res) => {
   const received = u ? partSize(u.id) : null;
   if (!u || received === null) return res.status(404).json({ error: 'Subida no encontrada' });
   if (received !== u.size) return res.status(409).json({ error: 'Faltan datos por subir', received });
-  if (u.page_id && !db.prepare('SELECT id FROM pages WHERE id = ?').get(u.page_id)) {
+  if (u.page_id && !pageInWs(u.page_id, u.workspace_id)) {
     return res.status(400).json({ error: 'La página ya no existe' });
   }
   const fileId = nanoid(21);
   fs.renameSync(uploadPartPath(u.id), path.join(FILES_DIR, fileId)); // mismo disco: operación atómica
   db.transaction(() => {
-    db.prepare('INSERT INTO files (id, page_id, name, mime, size) VALUES (?, ?, ?, ?, ?)').run(
+    db.prepare('INSERT INTO files (id, page_id, name, mime, size, workspace_id) VALUES (?, ?, ?, ?, ?, ?)').run(
       fileId,
       u.page_id,
       u.name,
       u.mime,
-      u.size
+      u.size,
+      u.workspace_id
     );
     db.prepare('DELETE FROM uploads WHERE id = ?').run(u.id);
   })();
@@ -1162,14 +1196,17 @@ app.get('/api/search', (req, res) => {
     return ' ';
   }).trim();
   if (!q && !tagList.length) return res.json([]);
-  const tagged = tagList.length ? new Set(pagesWithTags(tagList, 'all') || []) : null;
+  const tagged = tagList.length ? new Set(pagesWithTags(req.ws, tagList, 'all') || []) : null;
   const withTags = (rows) => rows.map((r) => ({ ...r, tags: tagsOf(r.id) }));
   if (!q) {
     const ids = [...tagged].slice(0, 50);
     if (!ids.length) return res.json([]);
     const rows = db
-      .prepare(`SELECT id, title, icon, NULL AS snippet FROM pages WHERE id IN (${ids.map(() => '?').join(', ')}) ORDER BY updated_at DESC`)
-      .all(...ids);
+      .prepare(
+        `SELECT id, title, icon, NULL AS snippet FROM pages
+         WHERE workspace_id = ? AND id IN (${ids.map(() => '?').join(', ')}) ORDER BY updated_at DESC`
+      )
+      .all(req.ws, ...ids);
     return res.json(withTags(rows));
   }
   const ftsQuery = q
@@ -1183,11 +1220,11 @@ app.get('/api/search', (req, res) => {
                 snippet(pages_fts, 2, char(2), char(3), '…', 14) AS snippet
          FROM pages_fts
          JOIN pages p ON p.id = pages_fts.page_id
-         WHERE pages_fts MATCH ? AND p.trashed_at IS NULL
+         WHERE pages_fts MATCH ? AND p.trashed_at IS NULL AND p.workspace_id = ?
          ORDER BY rank
          LIMIT ?`
       )
-      .all(ftsQuery, tagged ? 500 : 20);
+      .all(ftsQuery, req.ws, tagged ? 500 : 20);
     if (tagged) rows = rows.filter((r) => tagged.has(r.id)).slice(0, 20);
     // El fragmento es texto de la página: se escapa y solo <mark> queda como HTML
     for (const r of rows) {
@@ -1242,22 +1279,24 @@ function sanitizeName(name) {
 app.get('/api/export', async (req, res) => {
   const archiver = (await import('archiver')).default;
   const pages = db
-    .prepare('SELECT * FROM pages WHERE trashed_at IS NULL ORDER BY position, created_at')
-    .all();
+    .prepare('SELECT * FROM pages WHERE trashed_at IS NULL AND workspace_id = ? ORDER BY position, created_at')
+    .all(req.ws);
   const childrenMap = new Map();
   for (const p of pages) {
     const key = p.parent_id || null;
     if (!childrenMap.has(key)) childrenMap.set(key, []);
     childrenMap.get(key).push(p);
   }
-  const allFiles = db.prepare('SELECT * FROM files WHERE deleted_at IS NULL').all();
+  const allFiles = db.prepare('SELECT * FROM files WHERE deleted_at IS NULL AND workspace_id = ?').all(req.ws);
   const fileById = new Map(allFiles.map((f) => [f.id, f]));
   const fileEntryName = (f) => `files/${f.id}-${sanitizeName(f.name)}`;
 
   const archive = archiver('zip', { zlib: { level: 6 } });
   const stamp = new Date().toISOString().slice(0, 10);
   res.setHeader('Content-Type', 'application/zip');
-  res.setHeader('Content-Disposition', `attachment; filename="nonotion-export-${stamp}.zip"`);
+  const wsName = db.prepare('SELECT name FROM workspaces WHERE id = ?').get(req.ws)?.name || 'export';
+  const slug = wsName.normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^A-Za-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'export';
+  res.setHeader('Content-Disposition', `attachment; filename="nonotion-${slug}-${stamp}.zip"`);
   archive.on('error', (err) => {
     console.error('Error en export:', err);
     res.destroy(err);

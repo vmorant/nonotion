@@ -8,7 +8,8 @@ import { nanoid } from 'nanoid';
 import { z } from 'zod';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
-import { DATA_DIR } from './db.js';
+import db, { DATA_DIR } from './db.js';
+import { lookupToken } from './workspaces.js';
 import { markdownToDoc } from './markdown.js';
 
 const TEXT_LIMIT = 200 * 1024; // 200 KB para adjuntos de texto
@@ -29,8 +30,10 @@ const EXT_MIME = {
   '.pptx': 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
 };
 
-// El mismo token sirve para el conector MCP (en la URL) y como token de API
-// (Authorization: Bearer) para los scripts CLI y las llamadas internas del MCP.
+// Cada token da acceso a UN espacio y sirve tanto para el conector MCP (en la
+// URL) como de token de API (Authorization: Bearer) para scripts CLI y para las
+// llamadas internas del MCP. Este es el token histórico del archivo mcp_token,
+// que queda asociado al espacio inicial.
 export function getOrCreateToken() {
   const tokenFile = path.join(DATA_DIR, 'mcp_token');
   try {
@@ -81,10 +84,12 @@ export function checkAttachment(filename, content, encoding) {
 }
 
 export function mountMcp(app, port) {
-  const token = getOrCreateToken();
+  const legacyToken = getOrCreateToken();
   const base = `http://127.0.0.1:${port}`;
 
-  async function api(p, options = {}) {
+  // Las herramientas llaman a la API con el token de la conexión: el servidor
+  // aplica así el mismo control de espacios que a cualquier otra petición
+  async function apiWith(token, p, options = {}) {
     const headers = { Authorization: `Bearer ${token}`, ...(options.headers || {}) };
     if (options.body && typeof options.body === 'string') headers['Content-Type'] = 'application/json';
     const res = await fetch(base + p, { ...options, headers });
@@ -103,7 +108,8 @@ export function mountMcp(app, port) {
   const ok = (text) => ({ content: [{ type: 'text', text }] });
   const fail = (err) => ({ content: [{ type: 'text', text: `Error: ${err.message}` }], isError: true });
 
-  function buildServer() {
+  function buildServer(token) {
+    const api = (p, options) => apiWith(token, p, options);
     const server = new McpServer({ name: 'nonotion', version: '1.0.0' });
 
     server.registerTool(
@@ -143,7 +149,9 @@ export function mountMcp(app, port) {
       async () => {
         try {
           const pages = await (await api('/api/pages')).json();
-          if (!pages.length) return ok('No hay páginas todavía.');
+          const ws = (await (await api('/api/workspaces')).json()).workspaces?.[0];
+          const head = ws ? `Espacio: ${ws.icon || ''} ${ws.name} (este conector solo ve este espacio)\n\n` : '';
+          if (!pages.length) return ok(head + 'No hay páginas todavía.');
           const children = new Map();
           for (const p of pages) {
             const k = p.parent_id || null;
@@ -160,7 +168,7 @@ export function mountMcp(app, port) {
             }
           };
           walk(null, 0);
-          return ok(lines.join('\n'));
+          return ok(head + lines.join('\n'));
         } catch (e) {
           return fail(e);
         }
@@ -491,7 +499,7 @@ export function mountMcp(app, port) {
   }
 
   app.post('/mcp/:token', async (req, res) => {
-    if (req.params.token !== token) {
+    if (!lookupToken(req.params.token)) {
       return res.status(401).json({
         jsonrpc: '2.0',
         error: { code: -32001, message: 'Token MCP inválido' },
@@ -500,7 +508,7 @@ export function mountMcp(app, port) {
     }
     try {
       // Stateless: una instancia por petición, sin sesiones que mantener
-      const server = buildServer();
+      const server = buildServer(req.params.token);
       const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
       res.on('close', () => {
         transport.close();
@@ -518,7 +526,7 @@ export function mountMcp(app, port) {
 
   // En modo stateless no hay stream de notificaciones ni sesiones que cerrar
   const reject = (req, res) => {
-    if (req.params.token !== token) {
+    if (!lookupToken(req.params.token)) {
       return res.status(401).json({
         jsonrpc: '2.0',
         error: { code: -32001, message: 'Token MCP inválido' },
@@ -534,7 +542,8 @@ export function mountMcp(app, port) {
   app.get('/mcp/:token', reject);
   app.delete('/mcp/:token', reject);
 
-  console.log(`MCP activo: POST /mcp/${token}`);
-  console.log(`  Conector para Claude: https://TU_DOMINIO/mcp/${token}`);
-  return token;
+  const ws = db.prepare('SELECT w.name FROM api_tokens t JOIN workspaces w ON w.id = t.workspace_id WHERE t.token = ?').get(legacyToken);
+  console.log(`MCP activo: POST /mcp/<token> (un token por espacio y persona: Ajustes del espacio → Conector de Claude)`);
+  console.log(`  Conector del espacio "${ws?.name || '?'}": https://TU_DOMINIO/mcp/${legacyToken}`);
+  return legacyToken;
 }

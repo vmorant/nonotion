@@ -197,7 +197,80 @@ function QuickSection({ name, title, items, byId }) {
 
 const RECENT_SHOWN = 5;
 
-export default function Sidebar({ pages, recent = [], me, onCreate, onDelete, onDuplicate, onMove, onFavorite, onSearch, onCollapse, onOpenTrash }) {
+// Selector de espacio: cambia entre proyectos (cada uno con sus páginas,
+// archivos, etiquetas, miembros y conector de Claude)
+function WorkspaceSwitcher({ workspaces, currentWs, owner, onSwitch, onSettings, onCreate }) {
+  const [open, setOpen] = useState(false);
+  const current = workspaces.find((w) => w.id === currentWs);
+  return (
+    <div className="ws-switcher">
+      <button className="ws-current" onClick={() => setOpen((v) => !v)} title="Cambiar de espacio">
+        <span className="ws-icon">{current?.icon || '🗂️'}</span>
+        <span className="ws-name">{current?.name || 'NoNotion'}</span>
+        <span className="ws-caret">▾</span>
+      </button>
+      {open && (
+        <div className="ws-menu" onMouseLeave={() => setOpen(false)}>
+          {workspaces.map((w) => (
+            <button
+              key={w.id}
+              className={'ws-item' + (w.id === currentWs ? ' active' : '')}
+              onClick={() => {
+                setOpen(false);
+                if (w.id !== currentWs) onSwitch(w.id);
+              }}
+            >
+              <span className="ws-icon">{w.icon}</span>
+              <span className="ws-name">{w.name}</span>
+              {w.id === currentWs && <span className="ws-check">✓</span>}
+            </button>
+          ))}
+          <div className="ws-sep" />
+          <button
+            className="ws-item"
+            onClick={() => {
+              setOpen(false);
+              onSettings();
+            }}
+          >
+            ⚙ Ajustes del espacio{current?.role === 'admin' ? ' y miembros' : ''}
+          </button>
+          {owner && (
+            <button
+              className="ws-item"
+              onClick={() => {
+                setOpen(false);
+                onCreate();
+              }}
+            >
+              + Nuevo espacio
+            </button>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+export default function Sidebar({
+  workspaces = [],
+  currentWs,
+  owner,
+  onSwitchWorkspace,
+  onWorkspaceSettings,
+  onCreateWorkspace,
+  pages,
+  recent = [],
+  me,
+  onCreate,
+  onDelete,
+  onDuplicate,
+  onMove,
+  onFavorite,
+  onSearch,
+  onCollapse,
+  onOpenTrash,
+}) {
   const byId = new Map(pages.map((p) => [p.id, p]));
   const favorites = pages.filter((p) => p.favorite_at).sort((a, b) => a.favorite_at.localeCompare(b.favorite_at));
   const recentPages = recent.map((id) => byId.get(id)).filter(Boolean).slice(0, RECENT_SHOWN);
@@ -213,7 +286,14 @@ export default function Sidebar({ pages, recent = [], me, onCreate, onDelete, on
   return (
     <aside className="sidebar">
       <div className="sidebar-header">
-        <span className="logo">🗂️ NoNotion</span>
+        <WorkspaceSwitcher
+          workspaces={workspaces}
+          currentWs={currentWs}
+          owner={owner}
+          onSwitch={onSwitchWorkspace}
+          onSettings={onWorkspaceSettings}
+          onCreate={onCreateWorkspace}
+        />
         <button className="icon-btn" onClick={onCollapse} title="Ocultar barra lateral">
           «
         </button>
@@ -268,7 +348,7 @@ export default function Sidebar({ pages, recent = [], me, onCreate, onDelete, on
           🏷 Etiquetas
         </NavLink>
         <button onClick={onOpenTrash}>🗑 Papelera</button>
-        <button onClick={() => window.open('/api/export')} title="Descargar todo el workspace como Markdown + archivos">
+        <button onClick={() => window.open(api.exportUrl())} title="Descargar todo este espacio como Markdown + archivos">
           ⬇ Exportar todo
         </button>
       </div>

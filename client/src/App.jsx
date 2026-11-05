@@ -1,6 +1,14 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { Routes, Route, useNavigate, useLocation } from 'react-router-dom';
-import { api, CLIENT_ID, hasUnsavedWork, readRecent, pushRecent } from './api.js';
+import {
+  api,
+  hasUnsavedWork,
+  readRecent,
+  pushRecent,
+  setCurrentWorkspace,
+  readStoredWorkspace,
+  storeWorkspace,
+} from './api.js';
 import Sidebar from './components/Sidebar.jsx';
 import PageView from './components/PageView.jsx';
 import SearchModal from './components/SearchModal.jsx';
@@ -9,6 +17,7 @@ import CalendarView from './components/CalendarView.jsx';
 import TagsView from './components/TagsView.jsx';
 import FileViewer from './components/FileViewer.jsx';
 import WebPreview from './components/WebPreview.jsx';
+import WorkspaceSettings from './components/WorkspaceSettings.jsx';
 
 export default function App() {
   const [pages, setPages] = useState([]);
@@ -21,6 +30,12 @@ export default function App() {
   const [tags, setTags] = useState([]);
   const [viewing, setViewing] = useState(null); // adjunto abierto en el visor (desde enlaces o imágenes)
   const [previewing, setPreviewing] = useState(null); // web externa en vista previa
+  const [workspaces, setWorkspaces] = useState(null); // null = cargando
+  const [owner, setOwner] = useState(false); // propietario de la instancia
+  const [ws, setWs] = useState(null); // espacio actual
+  const [wsSettings, setWsSettings] = useState(false);
+  const wsRef = useRef(null); // espacio actual, también para la cabecera X-Workspace de api.js
+  const wantedWsRef = useRef(null); // espacio de una página abierta antes de cargar la lista
   const navigate = useNavigate();
   const location = useLocation();
 
@@ -29,6 +44,57 @@ export default function App() {
     setPages(p);
     if (t) setTags(t);
   }, []);
+
+  // Espacios a los que tengo acceso; se queda en el guardado si sigue disponible
+  const loadWorkspaces = useCallback(async () => {
+    const r = await api.workspaces();
+    setWorkspaces(r.workspaces);
+    setOwner(r.owner);
+    const ids = r.workspaces.map((w) => w.id);
+    const cur = wsRef.current;
+    const wanted = wantedWsRef.current;
+    wantedWsRef.current = null;
+    const stored = readStoredWorkspace();
+    const next = ids.includes(wanted) ? wanted : ids.includes(cur) ? cur : ids.includes(stored) ? stored : ids[0] || null;
+    wsRef.current = next;
+    setCurrentWorkspace(next);
+    if (next) storeWorkspace(next);
+    setWs(next);
+    return r.workspaces;
+  }, []);
+
+  const switchWorkspace = useCallback(
+    (id, { stay = false } = {}) => {
+      if (!id) return;
+      wsRef.current = id;
+      setCurrentWorkspace(id);
+      storeWorkspace(id);
+      setWs(id);
+      setPages([]);
+      setTags([]);
+      if (!stay) navigate('/');
+    },
+    [navigate]
+  );
+
+  // Al abrir una página de otro espacio (enlace, historial), se cambia a ese espacio
+  const onWorkspaceSeen = useCallback(
+    (id) => {
+      if (!id || id === wsRef.current) return;
+      if (!workspaces) wantedWsRef.current = id; // la lista aún no ha llegado
+      else if (workspaces.some((w) => w.id === id)) switchWorkspace(id, { stay: true });
+    },
+    [workspaces, switchWorkspace]
+  );
+
+  const createWorkspace = async () => {
+    const name = window.prompt('Nombre del nuevo espacio (p. ej. el del proyecto):');
+    if (!name?.trim()) return;
+    const created = await api.createWorkspace({ name: name.trim() });
+    await loadWorkspaces();
+    switchWorkspace(created.id);
+    setWsSettings(true);
+  };
 
   // Enlaces a adjuntos e imágenes → visor; webs externas → vista previa
   useEffect(() => {
@@ -43,9 +109,13 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    refreshTree();
+    loadWorkspaces().catch(() => setWorkspaces([]));
     api.me().then(setMe).catch(() => {});
-  }, [refreshTree]);
+  }, [loadWorkspaces]);
+
+  useEffect(() => {
+    if (ws) refreshTree();
+  }, [ws, refreshTree]);
 
   // Si hay cambios sin confirmar o subidas en curso, el navegador avisa antes
   // de cerrar o recargar la pestaña
@@ -61,7 +131,8 @@ export default function App() {
 
   // Sincronización en vivo: el servidor avisa cuando cambia algo (otra persona o el MCP)
   useEffect(() => {
-    const es = new EventSource(`/api/events?client=${encodeURIComponent(CLIENT_ID)}`);
+    if (!ws) return undefined;
+    const es = new EventSource(api.eventsUrl());
     let treeTimer;
     let counter = 0;
     es.onmessage = (e) => {
@@ -76,13 +147,15 @@ export default function App() {
         treeTimer = setTimeout(() => refreshTree(), 800); // agrupa ráfagas (p. ej. al teclear un título)
       } else if (msg.type === 'page') {
         setPageEvent({ id: msg.id, n: ++counter });
+      } else if (msg.type === 'workspaces') {
+        loadWorkspaces().catch(() => {});
       }
     };
     return () => {
       clearTimeout(treeTimer);
       es.close();
     };
-  }, [refreshTree]);
+  }, [ws, refreshTree, loadWorkspaces]);
 
   // Recientes: las páginas que se abren en este navegador
   useEffect(() => {
@@ -137,6 +210,12 @@ export default function App() {
     <div className="app">
       {sidebarOpen && (
         <Sidebar
+          workspaces={workspaces || []}
+          currentWs={ws}
+          owner={owner}
+          onSwitchWorkspace={switchWorkspace}
+          onWorkspaceSettings={() => setWsSettings(true)}
+          onCreateWorkspace={createWorkspace}
           pages={pages}
           recent={recent}
           me={me}
@@ -168,6 +247,7 @@ export default function App() {
                 onCreateChild={createPage}
                 onDuplicate={duplicatePage}
                 onFavorite={setFavorite}
+                onWorkspaceSeen={onWorkspaceSeen}
                 allTags={tags}
               />
             }
@@ -177,6 +257,12 @@ export default function App() {
           <Route
             path="*"
             element={
+              workspaces && !workspaces.length ? (
+                <div className="empty-state">
+                  <h1>Sin espacios</h1>
+                  <p>Tu cuenta todavía no tiene acceso a ningún espacio. Pide a quien administra el proyecto que te añada.</p>
+                </div>
+              ) : (
               <div className="empty-state">
                 <h1>NoNotion</h1>
                 <p>Tu espacio personal de apuntes, respuestas de IA y archivos. Sin límites.</p>
@@ -191,6 +277,7 @@ export default function App() {
                   + Crear una página
                 </button>
               </div>
+              )
             }
           />
         </Routes>
@@ -198,6 +285,20 @@ export default function App() {
       {searchOpen && <SearchModal tags={tags} onClose={() => setSearchOpen(false)} />}
       {viewing && <FileViewer file={viewing} onClose={() => setViewing(null)} />}
       {previewing && <WebPreview url={previewing} onClose={() => setPreviewing(null)} />}
+      {wsSettings && ws && (
+        <WorkspaceSettings
+          workspace={workspaces?.find((w) => w.id === ws)}
+          owner={owner}
+          me={me}
+          onChanged={loadWorkspaces}
+          onDeleted={async () => {
+            setWsSettings(false);
+            const list = await loadWorkspaces();
+            switchWorkspace(list[0]?.id);
+          }}
+          onClose={() => setWsSettings(false)}
+        />
+      )}
       {trashOpen && <TrashModal onClose={() => setTrashOpen(false)} onChanged={refreshTree} />}
     </div>
   );

@@ -8,6 +8,11 @@ description: Trabajar con NoNotion (el workspace personal del usuario) a través
 NoNotion es el workspace personal del usuario (tipo Notion, autoalojado). El MCP
 `nonotion` da acceso completo: páginas en Markdown, búsqueda y adjuntos.
 
+NoNotion se organiza en **espacios** (un proyecto o cliente cada uno) y cada
+conector ve **solo un espacio** (`list_pages` lo indica en la primera línea).
+Si el usuario tiene varios conectores (uno por proyecto), usa el del proyecto
+del que se habla y no mezcles información entre espacios.
+
 ## Regla nº 1: escribir solo cuando el usuario lo pida
 
 NUNCA escribas en NoNotion por iniciativa propia. El usuario indica el momento

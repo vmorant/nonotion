@@ -52,7 +52,17 @@ function draftDiffers(draft, page) {
   return false;
 }
 
-export default function PageView({ pages, pageEvent, onTreeChange, onDelete, onCreateChild, onDuplicate, onFavorite, allTags = [] }) {
+export default function PageView({
+  pages,
+  pageEvent,
+  onTreeChange,
+  onDelete,
+  onCreateChild,
+  onDuplicate,
+  onFavorite,
+  onWorkspaceSeen,
+  allTags = [],
+}) {
   const { id } = useParams();
   const [page, setPage] = useState(null);
   const [files, setFiles] = useState([]);
@@ -71,6 +81,9 @@ export default function PageView({ pages, pageEvent, onTreeChange, onDelete, onC
   const [tagsOverride, setTagsOverride] = useState(null);
   const [backlinks, setBacklinks] = useState([]);
   const editorRef = useRef(null);
+  // en un ref: cambiar de espacio no debe recargar la página abierta
+  const wsSeenRef = useRef(onWorkspaceSeen);
+  wsSeenRef.current = onWorkspaceSeen;
   const focusedRef = useRef(false);
   const saveTimer = useRef(null);
   const liveTimer = useRef(null);
@@ -97,6 +110,7 @@ export default function PageView({ pages, pageEvent, onTreeChange, onDelete, onC
   const loadPage = useCallback(() => {
     return api.page(id).then((p) => {
       revRef.current = p.rev ?? 0;
+      wsSeenRef.current?.(p.workspace_id);
       setPage(p);
       setFiles(p.files || []);
       setShareToken(p.share_token);
