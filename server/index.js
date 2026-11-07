@@ -14,6 +14,16 @@ import { setupAuth, purgeExpiredSessions } from './auth.js';
 import { mountTags, tagsOf, setPageTags, copyTags, pagesWithTags, TAGS_COLUMN, splitTags, lowercaseTags } from './tags.js';
 import { workspaceGuard, mountWorkspaces, pageInWs, adoptLegacyToken, loginOf } from './workspaces.js';
 import { movePages, MoveError, describeMove } from './pageMove.js';
+import {
+  EMPTY_CANVAS,
+  CanvasError,
+  normalizeCanvas,
+  canvasText,
+  canvasToMarkdown,
+  linkedPageIds,
+  pageIdOfFile,
+  fileIdOfFile,
+} from './canvas.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PORT = process.env.PORT || 3000;
@@ -138,7 +148,7 @@ mountWorkspaces(app, { notifyAll });
 app.get('/api/pages', (req, res) => {
   const rows = db
     .prepare(
-      `SELECT id, parent_id, title, icon, position, updated_at, page_date,
+      `SELECT id, parent_id, title, icon, position, updated_at, created_at, page_date, kind,
               share_token IS NOT NULL AS shared, full_width, ${TAGS_COLUMN},
               (SELECT created_at FROM favorites f WHERE f.page_id = pages.id AND f.github_login = ?) AS favorite_at
        FROM pages WHERE trashed_at IS NULL AND workspace_id = ? ORDER BY position, created_at`
@@ -151,17 +161,30 @@ const validDate = (v) => (typeof v === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(v)
 
 app.post('/api/pages', (req, res) => {
   const { parent_id = null, title = '', icon = '', content = null, page_date = null } = req.body || {};
+  const kind = req.body?.kind === 'canvas' ? 'canvas' : 'doc';
   if (parent_id && !pageInWs(parent_id, req.ws)) return res.status(400).json({ error: 'Padre inexistente' });
+  // Canvas: JSON Canvas validado (vacío si no se da); documento: content opcional
+  // como string = markdown crudo (mismo mecanismo que /api/capture)
+  let raw = typeof content === 'string' ? content : '';
+  let text = raw;
+  if (kind === 'canvas') {
+    try {
+      const c = content ? normalizeCanvas(content) : EMPTY_CANVAS;
+      raw = JSON.stringify(c);
+      text = canvasText(c);
+    } catch (e) {
+      if (e instanceof CanvasError) return res.status(400).json({ error: e.message });
+      throw e;
+    }
+  }
   const id = nanoid(12);
   const pos = db
     .prepare('SELECT COALESCE(MAX(position) + 1, 0) AS p FROM pages WHERE parent_id IS ? AND workspace_id = ?')
     .get(parent_id, req.ws).p;
-  // content opcional como string: markdown crudo (mismo mecanismo que /api/capture)
-  const raw = typeof content === 'string' ? content : '';
   db.prepare(
-    'INSERT INTO pages (id, parent_id, title, icon, content, content_text, position, page_date, workspace_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)'
-  ).run(id, parent_id, title, icon, raw, raw, pos, validDate(page_date), req.ws);
-  ftsUpsert(id, title, raw);
+    'INSERT INTO pages (id, parent_id, title, icon, content, content_text, position, page_date, workspace_id, kind) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
+  ).run(id, parent_id, title, icon, raw, text, pos, validDate(page_date), req.ws, kind);
+  ftsUpsert(id, title, text);
   notifyTree(req);
   res.json(db.prepare('SELECT * FROM pages WHERE id = ?').get(id));
 });
@@ -198,6 +221,35 @@ app.get('/api/pages/:id/backlinks', (req, res) => {
   res.json(rows);
 });
 
+// Grafo del espacio: páginas, enlaces internos entre ellas (también desde
+// tarjetas de canvas), etiquetas y adjuntos. El cliente filtra y dibuja.
+app.get('/api/graph', (req, res) => {
+  const pages = db
+    .prepare(
+      `SELECT id, parent_id, title, icon, kind, created_at, updated_at, content, ${TAGS_COLUMN}
+       FROM pages WHERE trashed_at IS NULL AND workspace_id = ?`
+    )
+    .all(req.ws);
+  const alive = new Set(pages.map((p) => p.id));
+  const links = [];
+  for (const p of pages) {
+    for (const target of linkedPageIds(p.content)) {
+      if (target !== p.id && alive.has(target)) links.push({ source: p.id, target });
+    }
+  }
+  const files = db
+    .prepare(
+      `SELECT f.id, f.name, f.mime, f.page_id, f.created_at FROM files f JOIN pages p ON p.id = f.page_id
+       WHERE f.deleted_at IS NULL AND f.workspace_id = ? AND p.trashed_at IS NULL`
+    )
+    .all(req.ws);
+  res.json({
+    pages: pages.map(({ content, tags, ...p }) => ({ ...p, tags: splitTags(tags) })),
+    links,
+    files,
+  });
+});
+
 mountTags(app, { notifyTree });
 
 function snapshotVersion(page, { throttled }) {
@@ -231,6 +283,17 @@ app.put('/api/pages/:id', (req, res) => {
   if (typeof b.icon === 'string') fields.icon = b.icon;
   if (b.content !== undefined) fields.content = typeof b.content === 'string' ? b.content : JSON.stringify(b.content);
   if (typeof b.content_text === 'string') fields.content_text = b.content_text;
+  // Un canvas solo admite JSON Canvas válido; su texto buscable lo calcula el servidor
+  if (page.kind === 'canvas' && fields.content !== undefined) {
+    try {
+      const c = normalizeCanvas(fields.content);
+      fields.content = JSON.stringify(c);
+      fields.content_text = canvasText(c);
+    } catch (e) {
+      if (e instanceof CanvasError) return res.status(400).json({ error: `Esta página es un canvas: ${e.message}` });
+      throw e;
+    }
+  }
   if (typeof b.position === 'number') fields.position = b.position;
   if (b.page_date !== undefined) fields.page_date = validDate(b.page_date);
   // Cambiar de padre pasa por la misma función que el resto de movimientos
@@ -345,8 +408,8 @@ app.post('/api/pages/:id/duplicate', (req, res) => {
   if (!orig) return res.status(404).json({ error: 'Página no encontrada' });
 
   const insertPage = db.prepare(
-    `INSERT INTO pages (id, parent_id, title, icon, content, content_text, position, workspace_id)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+    `INSERT INTO pages (id, parent_id, title, icon, content, content_text, position, workspace_id, kind)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
   );
   const insertFile = db.prepare('INSERT INTO files (id, page_id, name, mime, size, workspace_id) VALUES (?, ?, ?, ?, ?, ?)');
 
@@ -361,7 +424,8 @@ app.post('/api/pages/:id/duplicate', (req, res) => {
       src.content,
       src.content_text,
       position ?? src.position,
-      src.workspace_id
+      src.workspace_id,
+      src.kind || 'doc'
     );
     let content = src.content;
     const files = db.prepare('SELECT * FROM files WHERE page_id = ? AND deleted_at IS NULL').all(srcId);
@@ -652,12 +716,16 @@ app.post('/api/capture', async (req, res) => {
 app.get('/api/pages/:id/markdown', async (req, res) => {
   const page = db.prepare('SELECT * FROM pages WHERE id = ?').get(req.params.id);
   if (!page) return res.status(404).json({ error: 'Página no encontrada' });
-  const markdown = await docToMarkdown(page.content);
+  const isCanvas = page.kind === 'canvas';
+  const titleOf = (pid) => db.prepare('SELECT title FROM pages WHERE id = ? AND workspace_id = ?').get(pid, page.workspace_id)?.title;
+  const markdown = isCanvas ? canvasToMarkdown(page.content, titleOf) : await docToMarkdown(page.content);
   const files = db
     .prepare('SELECT id, name, mime, size FROM files WHERE page_id = ? AND deleted_at IS NULL ORDER BY created_at')
     .all(page.id);
   res.json({
     id: page.id,
+    kind: page.kind,
+    canvas: isCanvas ? JSON.parse(page.content || '{}') : undefined,
     title: page.title,
     icon: page.icon,
     page_date: page.page_date,
@@ -686,9 +754,12 @@ function saveDocWithVersion(req, page, doc) {
 }
 
 // Añade Markdown al final sin reescribir lo existente
+const CANVAS_MD_ERROR = 'Esta página es un canvas: no admite Markdown. Usa update_canvas para cambiarla.';
+
 app.post('/api/pages/:id/append', async (req, res) => {
   const page = db.prepare('SELECT * FROM pages WHERE id = ?').get(req.params.id);
   if (!page) return res.status(404).json({ error: 'Página no encontrada' });
+  if (page.kind === 'canvas') return res.status(400).json({ error: CANVAS_MD_ERROR });
   const { markdown } = req.body || {};
   if (typeof markdown !== 'string' || !markdown.trim()) {
     return res.status(400).json({ error: 'Falta el campo "markdown"' });
@@ -706,6 +777,7 @@ app.post('/api/pages/:id/append', async (req, res) => {
 app.post('/api/pages/:id/replace', async (req, res) => {
   const page = db.prepare('SELECT * FROM pages WHERE id = ?').get(req.params.id);
   if (!page) return res.status(404).json({ error: 'Página no encontrada' });
+  if (page.kind === 'canvas') return res.status(400).json({ error: CANVAS_MD_ERROR });
   const { find_text, replace_text } = req.body || {};
   if (typeof find_text !== 'string' || typeof replace_text !== 'string') {
     return res.status(400).json({ error: 'Faltan find_text y replace_text' });
@@ -1265,7 +1337,7 @@ app.delete('/api/pages/:id/share', (req, res) => {
 
 app.get('/api/share/:token', (req, res) => {
   const page = db
-    .prepare('SELECT id, title, icon, content, updated_at FROM pages WHERE share_token = ? AND trashed_at IS NULL')
+    .prepare('SELECT id, title, icon, content, kind, updated_at FROM pages WHERE share_token = ? AND trashed_at IS NULL')
     .get(req.params.token);
   if (!page) return res.status(404).json({ error: 'Enlace no válido' });
   page.files = db
@@ -1309,6 +1381,8 @@ app.get('/api/export', async (req, res) => {
   archive.pipe(res);
 
   const usedFiles = new Set();
+  const pathOfPage = new Map(); // id → ruta dentro del ZIP (para los canvas)
+  const canvases = []; // se escriben al final, cuando ya se conocen todas las rutas
 
   const addPages = async (parentId, dir, depth) => {
     const kids = childrenMap.get(parentId) || [];
@@ -1319,6 +1393,14 @@ app.get('/api/export', async (req, res) => {
       let n = 2;
       while (usedNames.has(candidate.toLowerCase())) candidate = `${base} (${n++})`;
       usedNames.add(candidate.toLowerCase());
+
+      if (page.kind === 'canvas') {
+        pathOfPage.set(page.id, `${dir}${candidate}.canvas`);
+        canvases.push(page);
+        if ((childrenMap.get(page.id) || []).length > 0) await addPages(page.id, `${dir}${candidate}/`, depth + 1);
+        continue;
+      }
+      pathOfPage.set(page.id, `${dir}${candidate}.md`);
 
       let md = await docToMarkdown(page.content);
       // Reescribe los enlaces /files/<id>/... a rutas relativas dentro del ZIP
@@ -1353,6 +1435,33 @@ app.get('/api/export', async (req, res) => {
   };
 
   await addPages(null, '', 0);
+
+  // Canvas en formato JSON Canvas (.canvas), como Obsidian: las páginas y los
+  // adjuntos se referencian por su ruta dentro del ZIP (el "vault")
+  for (const page of canvases) {
+    let c;
+    try {
+      c = normalizeCanvas(page.content);
+    } catch {
+      c = EMPTY_CANVAS;
+    }
+    const toVault = (ref) => {
+      const pid = pageIdOfFile(ref);
+      if (pid) return pathOfPage.get(pid) || ref;
+      const fid = fileIdOfFile(ref);
+      const f = fid && fileById.get(fid);
+      if (f) {
+        usedFiles.add(fid);
+        return fileEntryName(f);
+      }
+      return ref;
+    };
+    for (const n of c.nodes) {
+      if (n.type === 'file') n.file = toVault(n.file);
+      if (n.type === 'group' && n.background) n.background = toVault(n.background);
+    }
+    archive.append(JSON.stringify(c, null, '\t'), { name: pathOfPage.get(page.id) });
+  }
 
   for (const fid of usedFiles) {
     const f = fileById.get(fid);

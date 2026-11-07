@@ -3724,3 +3724,948 @@ kbd {
 .ProseMirror li > p {
   margin: 0.2em 0;
 }
+
+/* ============================================================
+   Canvas (como Obsidian Canvas, JSON Canvas 1.0)
+   ============================================================ */
+
+.page-body.is-canvas {
+  padding-bottom: 16px;
+  display: flex;
+  flex-direction: column;
+  height: calc(100vh - 49px);
+  min-height: 420px;
+}
+
+.page-body.is-canvas .page-head {
+  margin-bottom: 0;
+}
+
+.page-body.is-canvas .page-title {
+  font-size: 1.6rem;
+}
+
+.page-body.is-canvas .page-icon {
+  font-size: 1.8rem;
+}
+
+.canvas-wrap {
+  position: relative;
+  flex: 1;
+  min-height: 360px;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background-color: var(--bg-deep);
+  background-image: radial-gradient(circle, color-mix(in srgb, var(--text-faint) 55%, transparent) 1px, transparent 1.2px);
+  outline: none;
+  touch-action: none;
+  user-select: none;
+  cursor: default;
+}
+
+.share-page .canvas-wrap {
+  height: 70vh;
+}
+
+.canvas-wrap.is-panning,
+.canvas-wrap.is-panning * {
+  cursor: grab !important;
+}
+
+.canvas-layer {
+  position: absolute;
+  left: 0;
+  top: 0;
+  transform-origin: 0 0;
+}
+
+.canvas-card {
+  position: absolute;
+  --card-color: var(--border-strong);
+  background: var(--bg-elev);
+  border: 1.5px solid color-mix(in srgb, var(--card-color) 70%, var(--border-strong));
+  border-radius: 10px;
+  box-shadow: 0 6px 20px -10px var(--shadow-color);
+}
+
+.canvas-card[style*='--card-color'] {
+  background: color-mix(in srgb, var(--card-color) 9%, var(--bg-elev));
+}
+
+.canvas-card.is-selected {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 45%, transparent), 0 10px 30px -12px var(--shadow-color);
+}
+
+.canvas-card.is-target {
+  box-shadow: 0 0 0 3px var(--accent);
+}
+
+.canvas-card.type-group {
+  background: color-mix(in srgb, var(--card-color) 6%, transparent);
+  border-style: solid;
+  border-color: color-mix(in srgb, var(--card-color) 60%, var(--border-strong));
+  box-shadow: none;
+  border-radius: 14px;
+}
+
+.canvas-card.type-group[style*='--card-color'] {
+  background: color-mix(in srgb, var(--card-color) 10%, transparent);
+}
+
+.canvas-group-label {
+  position: absolute;
+  left: 0;
+  bottom: 100%;
+  margin-bottom: 6px;
+  padding: 2px 10px;
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--card-color) 22%, var(--bg-elev));
+  color: var(--text);
+  font-size: 1.05rem;
+  font-weight: 600;
+  white-space: nowrap;
+  cursor: text;
+}
+
+.canvas-group-label input {
+  background: transparent;
+  border: none;
+  color: inherit;
+  font: inherit;
+  outline: none;
+  width: 220px;
+}
+
+.canvas-scroll {
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  border-radius: 9px;
+}
+
+.canvas-card.is-selected .canvas-scroll {
+  overflow: auto;
+}
+
+.canvas-md {
+  padding: 10px 14px;
+  font-size: 0.95rem;
+  line-height: 1.55;
+  color: var(--text);
+  user-select: text;
+  word-wrap: break-word;
+}
+
+.canvas-md > :first-child {
+  margin-top: 0;
+}
+
+.canvas-md > :last-child {
+  margin-bottom: 0;
+}
+
+.canvas-md h1,
+.canvas-md h2,
+.canvas-md h3 {
+  letter-spacing: -0.02em;
+  line-height: 1.25;
+  margin: 0.6em 0 0.3em;
+}
+
+.canvas-md h1 {
+  font-size: 1.45rem;
+}
+
+.canvas-md h2 {
+  font-size: 1.2rem;
+}
+
+.canvas-md h3 {
+  font-size: 1.05rem;
+}
+
+.canvas-md a {
+  color: var(--accent-text);
+}
+
+.canvas-md code {
+  font-family: var(--font-mono);
+  font-size: 0.85em;
+  background: var(--bg-hover);
+  border-radius: 4px;
+  padding: 0.1em 0.3em;
+}
+
+.canvas-md pre {
+  background: var(--code-bg);
+  color: #e8ebf1;
+  border-radius: 8px;
+  padding: 10px;
+  overflow: auto;
+}
+
+.canvas-md pre code {
+  background: none;
+  padding: 0;
+}
+
+.canvas-md table {
+  border-collapse: collapse;
+}
+
+.canvas-md th,
+.canvas-md td {
+  border: 1px solid var(--border-strong);
+  padding: 3px 8px;
+}
+
+.canvas-md blockquote {
+  margin: 0.4em 0;
+  padding-left: 10px;
+  border-left: 3px solid var(--accent);
+  color: var(--text-dim);
+}
+
+.canvas-textarea {
+  width: 100%;
+  height: 100%;
+  resize: none;
+  border: none;
+  outline: none;
+  background: transparent;
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: 0.86rem;
+  line-height: 1.55;
+  padding: 10px 14px;
+  user-select: text;
+}
+
+.canvas-empty-hint {
+  padding: 12px 14px;
+  color: var(--text-faint);
+  font-size: 0.85rem;
+}
+
+.canvas-card-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 10px;
+  border-bottom: 1px solid var(--border);
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--text);
+  background: color-mix(in srgb, var(--bg-hover) 60%, transparent);
+  position: sticky;
+  top: 0;
+  z-index: 1;
+}
+
+.canvas-card-title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.canvas-page {
+  display: flex;
+  flex-direction: column;
+  min-height: 100%;
+}
+
+.canvas-page .canvas-card-head {
+  cursor: pointer;
+}
+
+.canvas-img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  display: block;
+  pointer-events: none;
+}
+
+.canvas-file {
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  color: var(--text-dim);
+  padding: 10px;
+}
+
+.canvas-file-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text);
+}
+
+.canvas-link {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+.canvas-iframe {
+  flex: 1;
+  width: 100%;
+  border: none;
+  background: #fff;
+}
+
+/* Tiradores: redimensionar (selección) y conectar (al pasar por el borde) */
+.canvas-resize {
+  position: absolute;
+  z-index: 3;
+}
+
+.canvas-resize.r-n,
+.canvas-resize.r-s {
+  left: 8px;
+  right: 8px;
+  height: 10px;
+  cursor: ns-resize;
+}
+
+.canvas-resize.r-n {
+  top: -5px;
+}
+
+.canvas-resize.r-s {
+  bottom: -5px;
+}
+
+.canvas-resize.r-e,
+.canvas-resize.r-w {
+  top: 8px;
+  bottom: 8px;
+  width: 10px;
+  cursor: ew-resize;
+}
+
+.canvas-resize.r-e {
+  right: -5px;
+}
+
+.canvas-resize.r-w {
+  left: -5px;
+}
+
+.canvas-resize.r-ne,
+.canvas-resize.r-nw,
+.canvas-resize.r-se,
+.canvas-resize.r-sw {
+  width: 12px;
+  height: 12px;
+  border-radius: 3px;
+  background: var(--bg-elev);
+  border: 2px solid var(--accent);
+}
+
+.canvas-resize.r-ne {
+  top: -6px;
+  right: -6px;
+  cursor: nesw-resize;
+}
+
+.canvas-resize.r-sw {
+  bottom: -6px;
+  left: -6px;
+  cursor: nesw-resize;
+}
+
+.canvas-resize.r-nw {
+  top: -6px;
+  left: -6px;
+  cursor: nwse-resize;
+}
+
+.canvas-resize.r-se {
+  bottom: -6px;
+  right: -6px;
+  cursor: nwse-resize;
+}
+
+.canvas-handle {
+  position: absolute;
+  z-index: 4;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: var(--accent);
+  border: 3px solid var(--bg-elev);
+  box-shadow: 0 0 0 1px var(--accent);
+  opacity: 0;
+  transition: opacity 0.12s;
+  cursor: crosshair;
+}
+
+.canvas-card:hover > .canvas-handle,
+.canvas-card.is-selected > .canvas-handle {
+  opacity: 1;
+}
+
+.canvas-handle.h-top {
+  top: -7px;
+  left: calc(50% - 7px);
+}
+
+.canvas-handle.h-bottom {
+  bottom: -7px;
+  left: calc(50% - 7px);
+}
+
+.canvas-handle.h-left {
+  left: -7px;
+  top: calc(50% - 7px);
+}
+
+.canvas-handle.h-right {
+  right: -7px;
+  top: calc(50% - 7px);
+}
+
+/* Conexiones */
+.canvas-edges {
+  position: absolute;
+  left: 0;
+  top: 0;
+  overflow: visible;
+  pointer-events: none;
+}
+
+.canvas-edge {
+  fill: none;
+  stroke-width: 2.5;
+  stroke-linecap: round;
+}
+
+.canvas-edge.is-selected {
+  stroke-width: 3.5;
+}
+
+.canvas-edge.is-temp {
+  stroke-dasharray: 6 5;
+}
+
+.canvas-edge-hit {
+  fill: none;
+  stroke: transparent;
+  stroke-width: 16;
+  pointer-events: stroke;
+  cursor: pointer;
+}
+
+.canvas-edge-end {
+  fill: var(--bg-elev);
+  stroke: var(--accent);
+  stroke-width: 2.5;
+  pointer-events: all;
+  cursor: grab;
+}
+
+.canvas-edge-label {
+  position: absolute;
+  transform: translate(-50%, -50%);
+  padding: 2px 8px;
+  border-radius: 6px;
+  background: var(--bg-elev);
+  border: 1px solid color-mix(in srgb, var(--card-color, var(--border-strong)) 70%, var(--border-strong));
+  color: var(--text);
+  font-size: 0.85rem;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.canvas-edge-label input {
+  background: transparent;
+  border: none;
+  outline: none;
+  color: inherit;
+  font: inherit;
+  width: 160px;
+}
+
+.canvas-marquee {
+  position: absolute;
+  border: 1px solid var(--accent);
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+  pointer-events: none;
+}
+
+/* Barras y paneles flotantes */
+.canvas-ui {
+  position: absolute;
+  z-index: 10;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 4px;
+  background: var(--bg-elev);
+  border: 1px solid var(--border-strong);
+  border-radius: 10px;
+  box-shadow: 0 12px 34px -12px var(--shadow-color);
+}
+
+.canvas-ui button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 30px;
+  height: 30px;
+  border-radius: 7px;
+  color: var(--text-dim);
+}
+
+.canvas-ui button:hover {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+
+.canvas-ui button:disabled {
+  opacity: 0.35;
+  pointer-events: none;
+}
+
+.canvas-ui button.danger:hover {
+  color: var(--danger);
+  background: color-mix(in srgb, var(--danger) 14%, transparent);
+}
+
+.canvas-controls {
+  top: 12px;
+  right: 12px;
+  flex-direction: column;
+}
+
+.canvas-zoom-pct {
+  font-size: 0.66rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.canvas-sep-h {
+  width: 70%;
+  height: 1px;
+  background: var(--border);
+  margin: 2px 0;
+}
+
+.canvas-addbar {
+  bottom: 14px;
+  left: 50%;
+  transform: translateX(-50%);
+}
+
+.canvas-selbar {
+  transform: translateX(-50%);
+}
+
+.canvas-sep {
+  width: 1px;
+  align-self: stretch;
+  background: var(--border);
+  margin: 0 3px;
+}
+
+.canvas-ui .canvas-swatch {
+  min-width: 18px;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  margin: 0 2px;
+  border: 2px solid var(--bg-elev);
+  box-shadow: 0 0 0 1px var(--border-strong);
+}
+
+.canvas-ui .canvas-swatch:hover {
+  transform: scale(1.15);
+}
+
+.canvas-ui .canvas-swatch.is-none {
+  background: linear-gradient(135deg, transparent 45%, var(--danger) 45%, var(--danger) 55%, transparent 55%), var(--bg-elev);
+}
+
+.canvas-panel {
+  position: absolute;
+  z-index: 11;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 220px;
+  padding: 6px;
+  background: var(--bg-elev);
+  border: 1px solid var(--border-strong);
+  border-radius: 10px;
+  box-shadow: 0 18px 48px -12px var(--shadow-color);
+}
+
+.canvas-panel button {
+  justify-content: flex-start;
+  height: auto;
+  padding: 6px 9px;
+  text-align: left;
+  font-size: 0.85rem;
+  color: var(--text);
+}
+
+.canvas-panel-sep {
+  height: 1px;
+  background: var(--border);
+  margin: 3px 0;
+}
+
+.canvas-align {
+  top: calc(100% + 6px);
+  left: 50%;
+  transform: translateX(-50%);
+}
+
+.canvas-settings,
+.canvas-groups {
+  right: calc(100% + 8px);
+  top: 0;
+}
+
+.canvas-settings label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 6px;
+  font-size: 0.86rem;
+  color: var(--text);
+}
+
+.canvas-help {
+  margin: 4px 6px 2px;
+  font-size: 0.75rem;
+  color: var(--text-faint);
+  line-height: 1.5;
+  max-width: 260px;
+}
+
+.canvas-pick {
+  bottom: calc(100% + 8px);
+  left: 50%;
+  transform: translateX(-50%);
+  width: 320px;
+}
+
+.canvas-pick input {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text);
+  padding: 6px 8px;
+  margin-bottom: 4px;
+}
+
+.canvas-pick-list {
+  max-height: 280px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+}
+
+.canvas-ro {
+  top: 12px;
+  left: 12px;
+  gap: 6px;
+  padding: 5px 10px;
+  font-size: 0.8rem;
+  color: var(--text-dim);
+}
+
+.canvas-empty {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-faint);
+  pointer-events: none;
+  font-size: 0.95rem;
+  padding: 20px;
+  text-align: center;
+}
+
+.sidebar-section-actions {
+  display: inline-flex;
+  gap: 2px;
+}
+
+/* ============================================================
+   Grafo (como el Graph view de Obsidian)
+   ============================================================ */
+
+.graph-page {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+.graph-page-head {
+  display: flex;
+  align-items: baseline;
+  gap: 16px;
+  padding: 14px 20px 10px;
+  border-bottom: 1px solid var(--border);
+}
+
+.graph-page-head h2 {
+  margin: 0;
+  font-size: 1.15rem;
+  letter-spacing: -0.02em;
+}
+
+.graph-page-head a {
+  color: var(--accent-text);
+  font-size: 0.85rem;
+}
+
+.graph-wrap {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+  background: var(--bg);
+}
+
+.graph-canvas {
+  display: block;
+  outline: none;
+  cursor: grab;
+}
+
+.graph-canvas:active {
+  cursor: grabbing;
+}
+
+.graph-info {
+  position: absolute;
+  left: 12px;
+  bottom: 10px;
+  font-size: 0.75rem;
+  color: var(--text-faint);
+  pointer-events: none;
+}
+
+.graph-gear {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  background: var(--bg-elev);
+  border: 1px solid var(--border-strong);
+}
+
+.graph-empty {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-faint);
+  pointer-events: none;
+}
+
+.graph-settings {
+  position: absolute;
+  top: 46px;
+  right: 10px;
+  width: 270px;
+  max-height: calc(100% - 60px);
+  overflow-y: auto;
+  padding: 8px;
+  background: var(--bg-elev);
+  border: 1px solid var(--border-strong);
+  border-radius: 12px;
+  box-shadow: 0 18px 48px -12px var(--shadow-color);
+  font-size: 0.85rem;
+}
+
+.graph-settings-head {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 4px 6px;
+  font-weight: 650;
+}
+
+.graph-settings-head span {
+  flex: 1;
+}
+
+.graph-section {
+  border-top: 1px solid var(--border);
+  padding: 4px 0;
+}
+
+.graph-section-title {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  width: 100%;
+  padding: 5px 4px;
+  color: var(--text-dim);
+  font-size: 0.72rem;
+  font-weight: 650;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+}
+
+.graph-section-body {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 4px 4px 6px;
+}
+
+.graph-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  color: var(--text);
+}
+
+.graph-slider {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  color: var(--text);
+}
+
+.graph-slider input {
+  width: 100%;
+}
+
+.graph-search,
+.graph-group input:not([type='color']) {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text);
+  padding: 5px 8px;
+}
+
+.graph-group {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.graph-group input:not([type='color']) {
+  flex: 1;
+  min-width: 0;
+}
+
+.graph-group input[type='color'] {
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border: none;
+  background: none;
+}
+
+.graph-new-group,
+.graph-animate {
+  justify-content: center;
+}
+
+.graph-menu {
+  position: absolute;
+  z-index: 5;
+  display: flex;
+  flex-direction: column;
+  min-width: 190px;
+  padding: 4px;
+  background: var(--bg-elev);
+  border: 1px solid var(--border-strong);
+  border-radius: 10px;
+  box-shadow: 0 18px 48px -12px var(--shadow-color);
+}
+
+.graph-menu button {
+  text-align: left;
+  padding: 6px 9px;
+  border-radius: 6px;
+  font-size: 0.86rem;
+}
+
+.graph-menu button:hover {
+  background: var(--accent-soft);
+}
+
+/* Panel de grafo local (abajo a la derecha de la página) */
+.local-graph {
+  position: fixed;
+  right: 18px;
+  bottom: 18px;
+  z-index: 30;
+  width: 380px;
+  height: 320px;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg);
+  border: 1px solid var(--border-strong);
+  border-radius: 14px;
+  overflow: hidden;
+  box-shadow: 0 24px 70px -18px var(--shadow-color);
+  resize: both;
+}
+
+.local-graph-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 8px 6px 12px;
+  border-bottom: 1px solid var(--border);
+  font-size: 0.82rem;
+  font-weight: 650;
+}
+
+.local-graph-head > span {
+  flex: 1;
+}
+
+.local-graph-depth {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--text-dim);
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+}
+
+.local-graph-depth input {
+  width: 70px;
+}
+
+.graph-wrap.is-compact .graph-settings {
+  top: 40px;
+  width: 250px;
+}
+
+@media (max-width: 700px) {
+  .local-graph {
+    left: 10px;
+    right: 10px;
+    width: auto;
+  }
+}
+
+.canvas-md li.task {
+  list-style: none;
+  margin-left: -1.1em;
+}
+
+.canvas-md li.task.done {
+  color: var(--text-faint);
+  text-decoration: line-through;
+}

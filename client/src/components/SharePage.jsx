@@ -5,6 +5,7 @@ import { api, humanSize, parseContent } from '../api.js';
 import { baseExtensions } from './Editor.jsx';
 import FileViewer, { previewKind } from './FileViewer.jsx';
 import { fileFromHref } from '../fileLinks.js';
+import CanvasView from './canvas/CanvasView.jsx';
 
 export default function SharePage() {
   const { token } = useParams();
@@ -23,7 +24,8 @@ export default function SharePage() {
     api.sharedPage(token).then(setPage).catch((e) => setError(e.message));
   }, [token]);
 
-  const content = parseContent(page?.content);
+  // un canvas no pasa por el editor de texto
+  const content = page?.kind === 'canvas' ? '' : parseContent(page?.content);
 
   const editor = useEditor(
     {
@@ -55,7 +57,11 @@ export default function SharePage() {
           <span className="page-icon">{page.icon || '📄'}</span>
           <h1 className="page-title-static">{page.title || 'Sin título'}</h1>
         </div>
-        <EditorContent editor={editor} className="editor readonly" />
+        {page.kind === 'canvas' ? (
+          <CanvasView pageId={`share-${token}`} initialContent={page.content} readOnly />
+        ) : (
+          <EditorContent editor={editor} className="editor readonly" />
+        )}
         {page.files?.length > 0 && (
           <section className="attachments">
             <div className="attachments-header">

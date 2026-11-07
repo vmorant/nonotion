@@ -38,6 +38,8 @@ Webapp autoalojada tipo Notion, **sin límites de capacidad**: tus apuntes, resp
 - **Claude conectado (MCP)** — Claude (claude.ai, app móvil, Desktop, Claude Code) busca, lee, crea y edita páginas y lee los adjuntos (PDF, Office, Excel, imágenes) sin copiar y pegar. Ver [MCP](#mcp-conecta-claude-a-nonotion).
 - **Sincronización en vivo** — si cambias una página en otro dispositivo, o la cambia Claude, se actualiza sola sin recargar (si estás escribiendo en ella, te avisa en vez de pisarte).
 - **Subidas sin límite de tamaño** — los archivos se suben en trozos reanudables con barra de progreso (Cloudflare corta en 100 MB por petición; así no aplica).
+- **Grafo de notas (como el Graph view de Obsidian)** — **🕸 Grafo** en la barra lateral: cada página es un círculo y cada enlace interno una línea; cuantas más páginas la enlazan, más grande. Pasar el ratón resalta sus conexiones, clic abre (Ctrl/⌘+clic en pestaña nueva, clic derecho: menú), arrastra nodos o el lienzo, zoom con rueda o `+`/`-` y flechas para desplazarte. Ajustes (⚙): filtros (búsqueda, etiquetas, adjuntos, huérfanas y la jerarquía del árbol), **grupos de color** por texto o `#etiqueta`, visualización (flechas, umbral de texto, tamaño de nodo, grosor de enlace, **animación** en orden de creación) y fuerzas (centro, repulsión, enlace, distancia). En cada página, el botón de **grafo local** muestra sus vecinas con profundidad ajustable (entrantes, salientes y enlaces entre vecinas).
+- **Canvas (como Obsidian Canvas)** — lienzos infinitos en formato abierto **JSON Canvas** (se exportan como `.canvas` y se abren en Obsidian). Tarjetas de texto en Markdown (doble clic en el canvas), páginas de NoNotion con su contenido, imágenes y archivos, webs y grupos; arrastra páginas del árbol, archivos del ordenador o enlaces del navegador. Conecta tarjetas desde sus bordes (con etiqueta, dirección y color; soltar en vacío crea una tarjeta conectada), selecciona con Mayús o recuadro, mueve con ajuste a la cuadrícula (Espacio lo desactiva, Mayús fija el eje, Alt duplica), redimensiona, alinea/organiza/reparte, agrupa, colorea, convierte una tarjeta en página, deshacer/rehacer, zoom (encajar `Mayús+1`, a la selección `Mayús+2`), ir a un grupo y modo solo lectura. Un canvas es una página más (árbol, papelera, historial, compartir, búsqueda y backlinks) y Claude lo lee y lo edita (`create_canvas`, `update_canvas`).
 - **Espacios (varios proyectos)** — una sola instancia con varios espacios separados (por ejemplo, un cliente y otro proyecto), cada uno con sus páginas, archivos, etiquetas, papelera, calendario, miembros y conector de Claude. Selector arriba a la izquierda. Ver [Espacios](#espacios-varios-proyectos-y-equipos).
 - **Login con GitHub** — solo entran los usuarios de GitHub que autorices; compatible con Cloudflare Access como segunda capa (o sin él). Ver [Login con GitHub](#login-con-github).
 - **Diseño propio** — interfaz estilo Obsidian con la marca NoNotion (negro, blanco y azul eléctrico), tema oscuro, claro o el del sistema (botón abajo a la izquierda), iconos Lucide y tipografías Inter y JetBrains Mono servidas desde tu propio servidor.
@@ -211,6 +213,7 @@ Solo si usas Access: los clientes MCP no pueden pasar el login de Zero Trust, as
 | `trash_page` | Mover a la papelera (reversible; no existe borrado definitivo vía MCP) |
 | `move_page` | Mover una página (con sus subpáginas) bajo otro padre o a la raíz, con posición opcional (`position`, `before_id`, `after_id`); no cambia contenido, etiquetas ni ids |
 | `move_pages` | Varios movimientos en una sola llamada, atómicos: si uno no es válido no se aplica ninguno |
+| `create_canvas` / `update_canvas` | Crear un canvas o reemplazar su contenido (JSON Canvas: tarjetas text/file/link/group y conexiones); `read_page` de un canvas devuelve su resumen y su JSON |
 | `read_attachment` | Leer el contenido de un adjunto: texto de PDF/Word/PowerPoint, hojas de Excel/ODS/CSV completas en CSV, imágenes y archivos de texto/código |
 | `read_document_pages` | Renderiza páginas concretas de un PDF/documento como imágenes (escaneados, diagramas, tablas con formato) |
 | `attach_file` | Subir un archivo (código generado, configs…) a una página; rechaza binarios incompletos |
@@ -225,7 +228,7 @@ En `skills/nonotion/SKILL.md` hay una skill lista para tu Claude: cópiala a `~/
 | Método | Ruta | Descripción |
 | --- | --- | --- |
 | GET | `/api/pages` | Árbol de páginas |
-| POST | `/api/pages` | Crear página (`parent_id` opcional) |
+| POST | `/api/pages` | Crear página (`parent_id` opcional; `kind: "canvas"` con `content` JSON Canvas para un canvas) |
 | GET/PUT/DELETE | `/api/pages/:id` | Leer / actualizar / mover a papelera (recursivo) |
 | POST | `/api/files` | Subir archivo (multipart, `page_id`; hasta 100 MB tras Cloudflare) |
 | POST | `/api/uploads` | Iniciar subida por trozos (`{name, size, mime, page_id}`) |
@@ -240,7 +243,8 @@ En `skills/nonotion/SKILL.md` hay una skill lista para tu Claude: cópiala a `~/
 | PUT | `/api/pages/:id/tags` | Fijar las etiquetas de una página (`{tags: [...]}`) |
 | PATCH/DELETE | `/api/tags/:nombre` | Color / renombrar (fusiona) · borrar etiqueta |
 | GET | `/api/tagged?tags=a,b&mode=all\|any` | Páginas con esas etiquetas y sus adjuntos |
-| GET | `/api/pages/:id/backlinks` | Páginas que enlazan a esta |
+| GET | `/api/pages/:id/backlinks` | Páginas que enlazan a esta (también desde canvas) |
+| GET | `/api/graph` | Grafo del espacio: páginas, enlaces internos, etiquetas y adjuntos |
 | GET/POST | `/api/workspaces` | Espacios accesibles / crear espacio (propietarios) |
 | PATCH/DELETE | `/api/workspaces/:id` | Renombrar / borrar (solo vacío) |
 | GET | `/api/workspaces/:id/members` | Miembros del espacio |

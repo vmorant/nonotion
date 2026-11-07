@@ -20,6 +20,7 @@ import WebPreview from './components/WebPreview.jsx';
 import WorkspaceSettings from './components/WorkspaceSettings.jsx';
 import { LogoMark, Wordmark } from './components/Logo.jsx';
 import { PanelLeftOpen } from 'lucide-react';
+import GraphPage from './components/graph/GraphPage.jsx';
 
 export default function App() {
   const [pages, setPages] = useState([]);
@@ -176,8 +177,8 @@ export default function App() {
     return () => window.removeEventListener('keydown', onKey);
   }, []);
 
-  const createPage = async (parentId = null) => {
-    const page = await api.createPage({ parent_id: parentId });
+  const createPage = async (parentId = null, kind = 'doc') => {
+    const page = await api.createPage({ parent_id: parentId, ...(kind === 'canvas' ? { kind, icon: '🧩', title: 'Canvas' } : {}) });
     await refreshTree();
     navigate(`/p/${page.id}`);
   };
@@ -259,6 +260,7 @@ export default function App() {
           />
           <Route path="/tags" element={<TagsView pages={pages} tags={tags} onChanged={refreshTree} />} />
           <Route path="/calendar" element={<CalendarView />} />
+          <Route path="/graph" element={<GraphPage pages={pages} />} />
           <Route
             path="*"
             element={

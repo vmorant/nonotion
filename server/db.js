@@ -1,5 +1,6 @@
 import Database from 'better-sqlite3';
 import crypto from 'crypto';
+import { parseCanvas, canvasText } from './canvas.js';
 import fs from 'fs';
 import path from 'path';
 
@@ -261,6 +262,11 @@ if (!colsOf('tags').includes('workspace_id')) {
 
 export const DEFAULT_WORKSPACE = defaultWs;
 
+// Tipo de página: 'doc' (editor) o 'canvas' (JSON Canvas, como en Obsidian)
+if (!colsOf('pages').includes('kind')) {
+  db.exec(`ALTER TABLE pages ADD COLUMN kind TEXT NOT NULL DEFAULT 'doc'`);
+}
+
 // Backfill inicial: reconstruye actividad pasada desde el historial de
 // versiones y la última modificación de cada página
 if (!db.prepare('SELECT 1 FROM activity LIMIT 1').get()) {
@@ -292,6 +298,7 @@ export function ftsDelete(pageId) {
 // Extrae texto plano de un content almacenado (JSON Tiptap o markdown crudo)
 export function extractText(content) {
   if (!content) return '';
+  if (parseCanvas(content)) return canvasText(content);
   if (typeof content === 'string' && !content.startsWith('{')) return content;
   let doc = content;
   if (typeof doc === 'string') {
