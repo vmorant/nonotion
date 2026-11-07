@@ -40,6 +40,7 @@ Webapp autoalojada tipo Notion, **sin límites de capacidad**: tus apuntes, resp
 - **Subidas sin límite de tamaño** — los archivos se suben en trozos reanudables con barra de progreso (Cloudflare corta en 100 MB por petición; así no aplica).
 - **Espacios (varios proyectos)** — una sola instancia con varios espacios separados (por ejemplo, un cliente y otro proyecto), cada uno con sus páginas, archivos, etiquetas, papelera, calendario, miembros y conector de Claude. Selector arriba a la izquierda. Ver [Espacios](#espacios-varios-proyectos-y-equipos).
 - **Login con GitHub** — solo entran los usuarios de GitHub que autorices; compatible con Cloudflare Access como segunda capa (o sin él). Ver [Login con GitHub](#login-con-github).
+- **Diseño propio** — interfaz estilo Obsidian con la marca NoNotion (negro, blanco y azul eléctrico), tema oscuro, claro o el del sistema (botón abajo a la izquierda), iconos Lucide y tipografías Inter y JetBrains Mono servidas desde tu propio servidor.
 - **Autoguardado a prueba de cortes** — todo se guarda solo mientras escribes; si se cae la red o se cierra el navegador, nada se pierde (ver [protección contra pérdidas](#copias-de-seguridad-y-protección-contra-pérdidas)).
 
 ## Stack

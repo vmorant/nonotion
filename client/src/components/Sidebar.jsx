@@ -2,6 +2,21 @@ import { useState } from 'react';
 import { NavLink, useNavigate } from 'react-router-dom';
 import { api } from '../api.js';
 import MoveDialog from './MoveDialog.jsx';
+import { LogoMark } from './Logo.jsx';
+import ThemeToggle from './ThemeToggle.jsx';
+import {
+  ChevronRight,
+  Plus,
+  MoreHorizontal,
+  PanelLeftClose,
+  Search,
+  CalendarDays,
+  Tags,
+  Trash2,
+  Download,
+  Link2,
+  ChevronsUpDown,
+} from 'lucide-react';
 
 function TreeItem({ page, index, childrenMap, depth, onCreate, onDelete, onDuplicate, onMove, onFavorite, onMoveTo }) {
   const [open, setOpen] = useState(depth < 1);
@@ -62,11 +77,19 @@ function TreeItem({ page, index, childrenMap, depth, onCreate, onDelete, onDupli
             setOpen((v) => !v);
           }}
         >
-          {kids.length > 0 ? (open ? '▾' : '▸') : '·'}
+          {kids.length > 0 ? (
+            <ChevronRight size={14} strokeWidth={2} className={'tree-chevron' + (open ? ' open' : '')} />
+          ) : (
+            <span className="tree-dot" />
+          )}
         </button>
         <span className="tree-icon">{page.icon || '📄'}</span>
         <span className="tree-title">{page.title || 'Sin título'}</span>
-        {page.shared ? <span className="tree-shared" title="Compartida públicamente">🔗</span> : null}
+        {page.shared ? (
+          <span className="tree-shared" title="Compartida públicamente">
+            <Link2 size={13} />
+          </span>
+        ) : null}
         <span className="tree-actions" onClick={(e) => e.preventDefault()}>
           <button
             title="Añadir subpágina"
@@ -75,7 +98,7 @@ function TreeItem({ page, index, childrenMap, depth, onCreate, onDelete, onDupli
               onCreate(page.id);
             }}
           >
-            +
+            <Plus size={14} />
           </button>
           <button
             title="Más opciones"
@@ -84,7 +107,7 @@ function TreeItem({ page, index, childrenMap, depth, onCreate, onDelete, onDupli
               setMenuOpen((v) => !v);
             }}
           >
-            ⋯
+            <MoreHorizontal size={14} />
           </button>
         </span>
       </NavLink>
@@ -141,8 +164,10 @@ function TreeItem({ page, index, childrenMap, depth, onCreate, onDelete, onDupli
           </button>
         </div>
       )}
-      {open &&
-        kids.map((k, i) => (
+      {open && kids.length > 0 && (
+        // la guía vertical cae bajo el triángulo del padre
+        <div className="tree-children" style={{ '--guide': `${8 + depth * 14 + 9}px` }}>
+        {kids.map((k, i) => (
           <TreeItem
             key={k.id}
             page={k}
@@ -157,6 +182,8 @@ function TreeItem({ page, index, childrenMap, depth, onCreate, onDelete, onDupli
             onMoveTo={onMoveTo}
           />
         ))}
+        </div>
+      )}
     </div>
   );
 }
@@ -217,7 +244,7 @@ function WorkspaceSwitcher({ workspaces, currentWs, owner, onSwitch, onSettings,
       <button className="ws-current" onClick={() => setOpen((v) => !v)} title="Cambiar de espacio">
         <span className="ws-icon">{current?.icon || '🗂️'}</span>
         <span className="ws-name">{current?.name || 'NoNotion'}</span>
-        <span className="ws-caret">▾</span>
+        <ChevronsUpDown size={14} className="ws-caret" />
       </button>
       {open && (
         <div className="ws-menu" onMouseLeave={() => setOpen(false)}>
@@ -298,6 +325,7 @@ export default function Sidebar({
     <aside className="sidebar">
       {moving && <MoveDialog page={moving} pages={pages} onMove={onMove} onClose={() => setMoving(null)} />}
       <div className="sidebar-header">
+        <LogoMark size={22} />
         <WorkspaceSwitcher
           workspaces={workspaces}
           currentWs={currentWs}
@@ -307,11 +335,11 @@ export default function Sidebar({
           onCreate={onCreateWorkspace}
         />
         <button className="icon-btn" onClick={onCollapse} title="Ocultar barra lateral">
-          «
+          <PanelLeftClose size={16} strokeWidth={1.8} />
         </button>
       </div>
       <button className="sidebar-search" onClick={onSearch}>
-        🔍 Buscar <kbd>Ctrl+K</kbd>
+        <Search size={15} strokeWidth={1.8} /> Buscar <kbd>Ctrl+K</kbd>
       </button>
       <div className="sidebar-scroll">
       <QuickSection name="favorites" title="Favoritas" items={favorites} byId={byId} />
@@ -320,7 +348,7 @@ export default function Sidebar({
         <div className="sidebar-section-title">
           <span>Páginas</span>
           <button className="icon-btn" onClick={() => onCreate(null)} title="Nueva página">
-            +
+            <Plus size={14} />
           </button>
         </div>
         <div
@@ -355,14 +383,16 @@ export default function Sidebar({
       </div>
       <div className="sidebar-tools">
         <NavLink to="/calendar" className={({ isActive }) => 'sidebar-tool-link' + (isActive ? ' active' : '')}>
-          📅 Calendario
+          <CalendarDays size={16} strokeWidth={1.8} /> Calendario
         </NavLink>
         <NavLink to="/tags" className={({ isActive }) => 'sidebar-tool-link' + (isActive ? ' active' : '')}>
-          🏷 Etiquetas
+          <Tags size={16} strokeWidth={1.8} /> Etiquetas
         </NavLink>
-        <button onClick={onOpenTrash}>🗑 Papelera</button>
+        <button onClick={onOpenTrash}>
+          <Trash2 size={16} strokeWidth={1.8} /> Papelera
+        </button>
         <button onClick={() => window.open(api.exportUrl())} title="Descargar todo este espacio como Markdown + archivos">
-          ⬇ Exportar todo
+          <Download size={16} strokeWidth={1.8} /> Exportar todo
         </button>
       </div>
       <div className="sidebar-footer">
@@ -390,6 +420,7 @@ export default function Sidebar({
         ) : (
           <span>Acceso local</span>
         )}
+        <ThemeToggle />
       </div>
     </aside>
   );

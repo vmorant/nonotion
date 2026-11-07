@@ -18,6 +18,8 @@ import TagsView from './components/TagsView.jsx';
 import FileViewer from './components/FileViewer.jsx';
 import WebPreview from './components/WebPreview.jsx';
 import WorkspaceSettings from './components/WorkspaceSettings.jsx';
+import { LogoMark, Wordmark } from './components/Logo.jsx';
+import { PanelLeftOpen } from 'lucide-react';
 
 export default function App() {
   const [pages, setPages] = useState([]);
@@ -235,7 +237,7 @@ export default function App() {
       <main className="main">
         {!sidebarOpen && (
           <button className="sidebar-reopen" onClick={() => setSidebarOpen(true)} title="Abrir barra lateral">
-            ☰
+            <PanelLeftOpen size={18} strokeWidth={1.8} />
           </button>
         )}
         <Routes>
@@ -267,7 +269,10 @@ export default function App() {
                 </div>
               ) : (
               <div className="empty-state">
-                <h1>NoNotion</h1>
+                <div className="empty-brand">
+                  <LogoMark size={72} />
+                  <Wordmark />
+                </div>
                 <p>Tu espacio personal de apuntes, respuestas de IA y archivos. Sin límites.</p>
                 <ul className="hints">
                   <li>Pega respuestas de Claude en Markdown y se formatean solas.</li>

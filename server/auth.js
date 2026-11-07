@@ -68,7 +68,7 @@ function safeNext(next) {
 }
 
 const PUBLIC_PREFIXES = ['/auth/', '/mcp/', '/assets/', '/share/', '/api/share/'];
-const PUBLIC_EXACT = new Set(['/login', '/favicon.ico', '/robots.txt', '/api/health']);
+const PUBLIC_EXACT = new Set(['/login', '/favicon.ico', '/favicon.svg', '/logo.svg', '/robots.txt', '/api/health']);
 const isPublic = (p) => PUBLIC_EXACT.has(p) || PUBLIC_PREFIXES.some((pre) => p.startsWith(pre));
 
 // Un adjunto es público si pertenece a una página compartida (no borrada)
@@ -99,34 +99,59 @@ const LOGIN_ERRORS = {
   config: 'El login con GitHub no está configurado en el servidor.',
 };
 
+// Marca (igual que client/public/logo.svg), en línea: el login no carga nada más
+const LOGO_SVG = `<svg viewBox="0 0 64 64" width="64" height="64" aria-hidden="true">
+  <defs>
+    <linearGradient id="t" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#16181F"/><stop offset="1" stop-color="#08090C"/></linearGradient>
+    <linearGradient id="s" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#5B8CFF"/><stop offset="1" stop-color="#1F5CFF"/></linearGradient>
+    <filter id="g" x="-50%" y="-50%" width="200%" height="200%"><feGaussianBlur stdDeviation="3"/></filter>
+  </defs>
+  <rect width="64" height="64" rx="15" fill="url(#t)"/>
+  <rect x="0.75" y="0.75" width="62.5" height="62.5" rx="14.25" fill="none" stroke="#fff" stroke-opacity="0.09" stroke-width="1.5"/>
+  <path d="M20 45V19M44 45V19" stroke="#F4F6FA" stroke-width="7" stroke-linecap="round"/>
+  <path d="M20 19L44 45" stroke="#2E6BFF" stroke-width="8" stroke-linecap="round" filter="url(#g)" opacity="0.7"/>
+  <path d="M20 19L44 45" stroke="url(#s)" stroke-width="7" stroke-linecap="round"/>
+</svg>`;
+
 function loginPage({ next, error }) {
   const msg = error && (LOGIN_ERRORS[error] || 'No se pudo iniciar sesión.');
   return `<!doctype html>
 <html lang="es"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Entrar · NoNotion</title>
+<link rel="icon" type="image/svg+xml" href="/favicon.svg">
+<meta name="theme-color" content="#0e0f12">
 <style>
-  :root { color-scheme: dark; }
-  body { margin:0; min-height:100vh; display:flex; align-items:center; justify-content:center;
-         background:#191919; color:#e8e8e6; font-family: ui-sans-serif,-apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif; }
-  .card { width:min(360px, calc(100vw - 32px)); background:#202020; border:1px solid #333; border-radius:12px;
-          padding:32px 28px; text-align:center; box-shadow:0 16px 50px rgba(0,0,0,.45); }
-  h1 { font-size:1.4rem; margin:0 0 6px; }
-  p { color:#9b9b9b; font-size:.9rem; margin:0 0 22px; }
-  a.btn { display:flex; align-items:center; justify-content:center; gap:10px; padding:11px 16px; border-radius:8px;
-          background:#e8e8e6; color:#191919; font-weight:600; text-decoration:none; }
-  a.btn:hover { background:#fff; }
-  .err { background:#3a1d1d; border:1px solid #6b2b2b; color:#f0a0a0; border-radius:8px; padding:10px 12px;
+  :root { color-scheme: dark; --blue:#2e6bff; }
+  * { box-sizing: border-box; }
+  body { margin:0; min-height:100vh; display:flex; align-items:center; justify-content:center; padding:16px;
+         background: radial-gradient(900px 500px at 50% -10%, rgba(46,107,255,.22), transparent 60%), #0e0f12;
+         color:#e8ebf1; font-family: Inter, ui-sans-serif,-apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif; }
+  .card { width:min(380px, 100%); background:#14161c; border:1px solid #2f3542; border-radius:16px;
+          padding:36px 30px 30px; text-align:center; box-shadow:0 30px 90px -20px rgba(0,0,0,.7); }
+  .logo svg { display:block; margin:0 auto 14px; border-radius:15px; box-shadow:0 18px 50px -14px var(--blue); }
+  h1 { font-size:1.7rem; margin:0 0 6px; letter-spacing:-.03em; font-weight:750; }
+  h1 span { color:var(--blue); }
+  p { color:#8c94a5; font-size:.92rem; margin:0 0 24px; }
+  a.btn { display:flex; align-items:center; justify-content:center; gap:10px; padding:12px 16px; border-radius:10px;
+          background:#f4f6fa; color:#0a0b0f; font-weight:650; text-decoration:none; transition:transform .1s, box-shadow .15s; }
+  a.btn:hover { box-shadow:0 0 0 3px rgba(46,107,255,.55); }
+  a.btn:active { transform:translateY(1px); }
+  a.btn:focus-visible { outline:2px solid var(--blue); outline-offset:2px; }
+  .err { background:rgba(255,77,94,.1); border:1px solid rgba(255,77,94,.45); color:#ff9aa4; border-radius:10px; padding:10px 12px;
          font-size:.85rem; margin-bottom:18px; text-align:left; }
-  svg { width:20px; height:20px; }
+  .gh { width:20px; height:20px; }
+  footer { margin-top:22px; color:#5c6373; font-size:.75rem; }
 </style></head>
 <body><main class="card">
-  <h1>🗂️ NoNotion</h1>
+  <div class="logo">${LOGO_SVG}</div>
+  <h1><span>No</span>Notion</h1>
   <p>Acceso privado. Identifícate con tu cuenta de GitHub.</p>
   ${msg ? `<div class="err">${escapeHtml(msg)}</div>` : ''}
   <a class="btn" href="/auth/github?next=${encodeURIComponent(next)}">
-    <svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>
+    <svg class="gh" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>
     Entrar con GitHub
   </a>
+  <footer>Tus notas, en tu servidor.</footer>
 </main></body></html>`;
 }
 
