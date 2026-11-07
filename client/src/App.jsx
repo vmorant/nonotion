@@ -18,6 +18,7 @@ import TagsView from './components/TagsView.jsx';
 import FileViewer from './components/FileViewer.jsx';
 import WebPreview from './components/WebPreview.jsx';
 import WorkspaceSettings from './components/WorkspaceSettings.jsx';
+import NewWorkspaceDialog from './components/NewWorkspaceDialog.jsx';
 import { LogoMark, Wordmark } from './components/Logo.jsx';
 import { PanelLeftOpen } from 'lucide-react';
 import GraphPage from './components/graph/GraphPage.jsx';
@@ -38,6 +39,7 @@ export default function App() {
   const [owner, setOwner] = useState(false); // propietario de la instancia
   const [ws, setWs] = useState(null); // espacio actual
   const [wsSettings, setWsSettings] = useState(false);
+  const [wsNew, setWsNew] = useState(false); // diálogo de nuevo espacio
   const wsRef = useRef(null); // espacio actual, también para la cabecera X-Workspace de api.js
   const wantedWsRef = useRef(null); // espacio de una página abierta antes de cargar la lista
   const navigate = useNavigate();
@@ -91,10 +93,10 @@ export default function App() {
     [workspaces, switchWorkspace]
   );
 
-  const createWorkspace = async () => {
-    const name = window.prompt('Nombre del nuevo espacio (p. ej. el del proyecto):');
-    if (!name?.trim()) return;
-    const created = await api.createWorkspace({ name: name.trim() });
+  // Diálogo propio (window.prompt no se muestra en apps instaladas ni en algunos móviles)
+  const createWorkspace = async (data) => {
+    const created = await api.createWorkspace(data);
+    setWsNew(false);
     await loadWorkspaces();
     switchWorkspace(created.id);
     setWsSettings(true);
@@ -222,7 +224,7 @@ export default function App() {
           owner={owner}
           onSwitchWorkspace={switchWorkspace}
           onWorkspaceSettings={() => setWsSettings(true)}
-          onCreateWorkspace={createWorkspace}
+          onCreateWorkspace={() => setWsNew(true)}
           pages={pages}
           recent={recent}
           me={me}
@@ -313,6 +315,7 @@ export default function App() {
         />
       )}
       {trashOpen && <TrashModal onClose={() => setTrashOpen(false)} onChanged={refreshTree} />}
+      {wsNew && <NewWorkspaceDialog onCreate={createWorkspace} onClose={() => setWsNew(false)} />}
     </div>
   );
 }
