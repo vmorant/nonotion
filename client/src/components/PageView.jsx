@@ -1,14 +1,15 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { useParams, Link } from 'react-router-dom';
+import { useParams, Link, useNavigate } from 'react-router-dom';
 import { api, parseContent, markBusy, clearBusy } from '../api.js';
 import Editor from './Editor.jsx';
 import Attachments from './Attachments.jsx';
 import EmojiPicker from './EmojiPicker.jsx';
 import HistoryModal from './HistoryModal.jsx';
 import PageOutline from './PageOutline.jsx';
-import { Star, MoveHorizontal, History, Download, Share2, FilePlus2, Copy, Trash2, Waypoints } from 'lucide-react';
+import { Star, MoveHorizontal, History, Download, Share2, FilePlus2, Copy, Trash2, Waypoints, Lightbulb } from 'lucide-react';
 import CanvasView from './canvas/CanvasView.jsx';
 import LocalGraphPanel from './graph/LocalGraphPanel.jsx';
+import IdeaView from './ideas/IdeaView.jsx';
 
 const ICON = { size: 16, strokeWidth: 1.8 };
 import { TagEditor } from './Tags.jsx';
@@ -69,6 +70,7 @@ export default function PageView({
   allTags = [],
 }) {
   const { id } = useParams();
+  const navigate = useNavigate();
   const [page, setPage] = useState(null);
   const [files, setFiles] = useState([]);
   const [status, setStatus] = useState('saved'); // saved | saving | retrying | error
@@ -332,6 +334,25 @@ export default function PageView({
 
   const crumbs = breadcrumb(pages, id);
   const isCanvas = page.kind === 'canvas';
+  const isIdea = page.kind === 'idea';
+  const isDoc = !isCanvas && !isIdea;
+
+  // "Desarrollar como idea": la selección del editor (o la página entera) pasa
+  // a ser la semilla de una idea nueva, con enlace a esta página como origen
+  const makeIdea = async () => {
+    const ed = editorRef.current;
+    let text = '';
+    if (ed) {
+      const { from, to } = ed.state.selection;
+      if (to > from) text = ed.state.doc.textBetween(from, to, '\n').trim();
+    }
+    const created = await api.createIdea({
+      title: text ? undefined : `Idea: ${page.title || 'Sin título'}`,
+      content: { type: 'idea', seeds: [{ kind: 'page', page_id: id, text: text || undefined }] },
+    });
+    await onTreeChange();
+    navigate(`/p/${created.id}`);
+  };
   const meta = pages.find((p) => p.id === id) || page;
   const fullWidth = prefsOverride.full_width ?? !!meta.full_width;
   const favorite = prefsOverride.favorite ?? !!meta.favorite_at;
@@ -447,6 +468,12 @@ export default function PageView({
       )}
       <div className="page-topbar">
         <nav className="breadcrumbs">
+          {isIdea && (
+            <span>
+              <Link to="/ideas">💡 Ideas</Link>
+              <span className="crumb-sep">/</span>
+            </span>
+          )}
           {crumbs.map((c, i) => (
             <span key={c.id}>
               {i > 0 && <span className="crumb-sep">/</span>}
@@ -492,7 +519,12 @@ export default function PageView({
           >
             <Waypoints {...ICON} />
           </button>
-          {!isCanvas && (
+          {isDoc && (
+            <button className="btn" onClick={makeIdea} title="Desarrollar como idea: la selección (o esta página) pasa a ser la semilla de una idea nueva">
+              <Lightbulb {...ICON} />
+            </button>
+          )}
+          {isDoc && (
             <button
               className={'btn' + (fullWidth ? ' active' : '')}
               onClick={() => setPref('full_width', !fullWidth)}
@@ -504,7 +536,7 @@ export default function PageView({
           <button className="btn" onClick={() => setHistoryOpen(true)} title="Historial de versiones">
             <History {...ICON} />
           </button>
-          {!isCanvas && (
+          {isDoc && (
             <button className="btn" onClick={exportMarkdown} title="Exportar como Markdown">
               <Download {...ICON} /> MD
             </button>
@@ -535,9 +567,11 @@ export default function PageView({
               </div>
             )}
           </div>
-          <button className="btn" onClick={() => onCreateChild(id)} title="Añadir subpágina">
-            <FilePlus2 {...ICON} />
-          </button>
+          {!isIdea && (
+            <button className="btn" onClick={() => onCreateChild(id)} title="Añadir subpágina">
+              <FilePlus2 {...ICON} />
+            </button>
+          )}
           <button className="btn" onClick={() => onDuplicate(id)} title="Duplicar página">
             <Copy {...ICON} />
           </button>
@@ -548,7 +582,7 @@ export default function PageView({
       </div>
 
       <div className="page-columns">
-      <div className={'page-body' + (fullWidth || isCanvas ? ' full' : '') + (isCanvas ? ' is-canvas' : '')}>
+      <div className={'page-body' + (fullWidth || isCanvas || isIdea ? ' full' : '') + (isCanvas ? ' is-canvas' : '') + (isIdea ? ' is-idea' : '')}>
         <div className="page-head">
           <button className="page-icon" onClick={() => setEmojiOpen((v) => !v)} title="Cambiar icono">
             {page.icon || '📄'}
@@ -576,7 +610,21 @@ export default function PageView({
 
         <TagEditor tags={pageTags} allTags={allTags} onChange={changeTags} />
 
-        {isCanvas ? (
+        {isIdea ? (
+          <IdeaView
+            key={`${id}:${reloadKey}`}
+            pageId={id}
+            title={page.title}
+            pages={pages}
+            files={files}
+            initialContent={page.content}
+            onFilesChange={setFiles}
+            onTreeChanged={onTreeChange}
+            onPatched={(r) => {
+              revRef.current = r.rev ?? revRef.current;
+            }}
+          />
+        ) : isCanvas ? (
           <CanvasView
             key={`${id}:${reloadKey}`}
             pageId={id}
@@ -615,7 +663,7 @@ export default function PageView({
           </section>
         )}
       </div>
-      {!isCanvas && <PageOutline editor={editor} />}
+      {isDoc && <PageOutline editor={editor} />}
       </div>
 
       {localGraph && <LocalGraphPanel pageId={id} pages={pages} onClose={toggleLocalGraph} />}

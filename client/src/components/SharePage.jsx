@@ -6,6 +6,7 @@ import { baseExtensions } from './Editor.jsx';
 import FileViewer, { previewKind } from './FileViewer.jsx';
 import { fileFromHref } from '../fileLinks.js';
 import CanvasView from './canvas/CanvasView.jsx';
+import IdeaView from './ideas/IdeaView.jsx';
 
 export default function SharePage() {
   const { token } = useParams();
@@ -25,7 +26,7 @@ export default function SharePage() {
   }, [token]);
 
   // un canvas no pasa por el editor de texto
-  const content = page?.kind === 'canvas' ? '' : parseContent(page?.content);
+  const content = page?.kind === 'canvas' || page?.kind === 'idea' ? '' : parseContent(page?.content);
 
   const editor = useEditor(
     {
@@ -57,7 +58,9 @@ export default function SharePage() {
           <span className="page-icon">{page.icon || '📄'}</span>
           <h1 className="page-title-static">{page.title || 'Sin título'}</h1>
         </div>
-        {page.kind === 'canvas' ? (
+        {page.kind === 'idea' ? (
+          <IdeaView pageId={page.id} title={page.title} initialContent={page.content} files={page.files || []} readOnly />
+        ) : page.kind === 'canvas' ? (
           <CanvasView pageId={`share-${token}`} initialContent={page.content} readOnly />
         ) : (
           <EditorContent editor={editor} className="editor readonly" />

@@ -149,9 +149,12 @@ export function mountMcp(app, port) {
       },
       async () => {
         try {
-          const pages = await (await api('/api/pages')).json();
+          const all = await (await api('/api/pages')).json();
+          const ideas = all.filter((p) => p.kind === 'idea');
+          const pages = all.filter((p) => p.kind !== 'idea');
           const ws = (await (await api('/api/workspaces')).json()).workspaces?.[0];
-          const head = ws ? `Espacio: ${ws.icon || ''} ${ws.name} (este conector solo ve este espacio)\n\n` : '';
+          let head = ws ? `Espacio: ${ws.icon || ''} ${ws.name} (este conector solo ve este espacio)\n` : '';
+          head += ideas.length ? `Ideas en desarrollo (fuera del árbol): ${ideas.length} → list_ideas\n\n` : '\n';
           if (!pages.length) return ok(head + 'No hay páginas todavía.');
           const children = new Map();
           for (const p of pages) {
@@ -181,7 +184,7 @@ export function mountMcp(app, port) {
       {
         title: 'Leer página',
         description:
-          'Lee una página de NoNotion: devuelve su contenido en Markdown y la lista de archivos adjuntos (con file_id para read_attachment). Si la página es un canvas, devuelve un resumen de tarjetas y conexiones y su JSON Canvas (para editarlo con update_canvas).',
+          'Lee una página de NoNotion: devuelve su contenido en Markdown y la lista de archivos adjuntos (con file_id para read_attachment). Si la página es un canvas, devuelve un resumen de tarjetas y conexiones y su JSON Canvas (para editarlo con update_canvas). Si es una idea, devuelve su semilla (con el texto OCR de las capturas; mira las imágenes con read_attachment), su desarrollo y sus resultados.',
         inputSchema: { page_id: z.string().describe('Id de la página') },
       },
       async ({ page_id }) => {
@@ -191,6 +194,7 @@ export function mountMcp(app, port) {
           out += `(id: ${p.id}${p.page_date ? ` · fecha: ${p.page_date}` : ''} · actualizada: ${p.updated_at}${p.trashed ? ' · EN PAPELERA' : ''})\n`;
           out += p.tags?.length ? `Etiquetas: ${p.tags.map((t) => '#' + t).join(' ')}\n\n` : '\n';
           if (p.kind === 'canvas') out += '(Esta página es un CANVAS: edítala con update_canvas, no con append/edit/update_page)\n\n';
+          if (p.kind === 'idea') out += '(Esta página es una IDEA: trabájala con develop_idea y materialize_idea, no con append/edit/update_page)\n\n';
           out += p.markdown || '(página vacía)';
           if (p.kind === 'canvas') out += `\n\n---\nJSON Canvas:\n\`\`\`json\n${JSON.stringify(p.canvas)}\n\`\`\``;
           if (p.files?.length) {
@@ -564,6 +568,156 @@ export function mountMcp(app, port) {
           if (page.kind !== 'canvas') return fail(new Error('Esa página no es un canvas: usa append_to_page, edit_page o update_page'));
           await api(`/api/pages/${page_id}`, { method: 'PUT', body: JSON.stringify({ content: { nodes, edges: edges || [] } }) });
           return ok(`Canvas "${page.title || 'Sin título'}" actualizado: ${nodes.length} tarjeta(s), ${(edges || []).length} conexión(es).`);
+        } catch (e) {
+          return fail(e);
+        }
+      }
+    );
+
+    // Ideas: desarrollo de ideas fuera del árbol (semilla → desarrollo → resultado)
+    const stepSchema = z.object({
+      kind: z
+        .enum(['note', 'question', 'answer', 'hypothesis', 'decision', 'discarded', 'outline'])
+        .describe('Tipo de paso: question (pregunta abierta), answer (respuesta de la persona), hypothesis, decision, discarded (descartado y por qué), outline (esquema del documento), note'),
+      text: z.string().describe('Texto del paso, en Markdown'),
+    });
+    const outcomeSchema = z.object({
+      type: z
+        .enum(['page', 'canvas', 'plan', 'file', 'external'])
+        .describe('page: página de NoNotion; canvas: diagrama/mapa (create_canvas); plan: página de planificación (tareas, hitos, fechas); file: archivo adjunto (attach_file: Word, Excel…); external: documento fuera de NoNotion (Google Docs, etc.)'),
+      page_id: z.string().optional().describe('Id de la página/canvas/plan creado (page, canvas, plan)'),
+      file_id: z.string().optional().describe('file_id del adjunto (file)'),
+      url: z.string().optional().describe('URL del documento externo (external)'),
+      label: z.string().optional().describe('Qué es, en pocas palabras: "Documento de diseño", "Diagrama de arquitectura", "Plan de implantación"'),
+      note: z.string().optional().describe('Observación breve (opcional)'),
+    });
+
+    server.registerTool(
+      'list_ideas',
+      {
+        title: 'Listar ideas',
+        description:
+          'Lista las ideas del espacio (desarrollo de ideas fuera del árbol de páginas) con su estado: seed (semilla sin trabajar), developing, documented, archived. Úsala cuando el usuario hable de sus ideas o pida desarrollar/documentar una.',
+        inputSchema: {
+          status: z.enum(['seed', 'developing', 'documented', 'archived']).optional().describe('Filtrar por estado'),
+        },
+      },
+      async ({ status }) => {
+        try {
+          let ideas = await (await api('/api/ideas')).json();
+          if (status) ideas = ideas.filter((i) => i.status === status);
+          if (!ideas.length) return ok(status ? `No hay ideas en estado "${status}".` : 'No hay ideas todavía.');
+          const label = { seed: 'semilla', developing: 'en desarrollo', documented: 'documentada', archived: 'archivada' };
+          return ok(
+            ideas
+              .map(
+                (i) =>
+                  `- ${i.icon || '💡'} ${i.title || 'Sin título'} (id: ${i.id}, ${label[i.status]}, ${i.seeds} semilla(s), ${i.steps} paso(s), ${i.outcomes.length} resultado(s))${i.preview ? `\n  ${i.preview}` : ''}`
+              )
+              .join('\n')
+          );
+        } catch (e) {
+          return fail(e);
+        }
+      }
+    );
+
+    server.registerTool(
+      'create_idea',
+      {
+        title: 'Crear idea',
+        description:
+          'Guarda una idea nueva (fuera del árbol de páginas) a partir de su semilla: un texto, una lista de temas, un enlace o un fragmento de una página. Úsala solo cuando el usuario pida guardar algo como idea. Si manda una captura o archivo, créala primero y adjúntalo con attach_file a la idea; la interfaz lo tomará como semilla. No desarrolles la idea aquí: eso es develop_idea, cuando el usuario lo pida.',
+        inputSchema: {
+          title: z.string().optional().describe('Título corto (si falta, se deriva de la semilla)'),
+          seed_text: z.string().optional().describe('La semilla en bruto, tal cual llegó (texto, lista de temas…)'),
+          seed_url: z.string().optional().describe('Enlace que originó la idea'),
+          source_page_id: z.string().optional().describe('Página de NoNotion de la que sale la idea (con seed_text como fragmento, si procede)'),
+          summary: z.string().optional().describe('Una frase que enuncie la idea (solo si el usuario ya la tiene clara)'),
+          icon: z.string().optional().describe('Emoji (por defecto 💡)'),
+          tags: z.array(z.string()).optional().describe('Etiquetas (reutiliza las existentes: list_tags)'),
+        },
+      },
+      async ({ title, seed_text, seed_url, source_page_id, summary, icon, tags }) => {
+        try {
+          const seeds = [];
+          if (source_page_id) seeds.push({ kind: 'page', page_id: source_page_id, text: seed_text || undefined });
+          else if (seed_text?.trim()) seeds.push({ kind: 'text', text: seed_text });
+          if (seed_url?.trim()) seeds.push({ kind: 'link', url: seed_url.trim() });
+          if (!seeds.length && !summary?.trim()) return fail(new Error('Indica al menos una semilla (seed_text, seed_url o source_page_id)'));
+          const r = await (
+            await api('/api/pages', {
+              method: 'POST',
+              body: JSON.stringify({ kind: 'idea', title, icon: icon || '💡', content: { type: 'idea', summary: summary || '', seeds } }),
+            })
+          ).json();
+          if (tags?.length) await api(`/api/pages/${r.id}/tags`, { method: 'PUT', body: JSON.stringify({ tags }) });
+          return ok(`Idea creada: "${r.title}" (id: ${r.id}, ruta: /p/${r.id}, estado: semilla). Está en la vista Ideas, fuera del árbol.`);
+        } catch (e) {
+          return fail(e);
+        }
+      }
+    );
+
+    server.registerTool(
+      'develop_idea',
+      {
+        title: 'Desarrollar idea',
+        description:
+          'Añade pasos al desarrollo de una idea (preguntas, hipótesis, decisiones, descartes, esquema) y, si procede, actualiza su resumen o estado. Lee antes la idea con read_page (y sus capturas con read_attachment). Úsala para dejar constancia del razonamiento acordado con el usuario, no para volcar conversación. Pasa primero a "developing" automáticamente.',
+        inputSchema: {
+          page_id: z.string().describe('Id de la idea'),
+          steps: z.array(stepSchema).min(1).max(50).describe('Pasos a añadir, en orden'),
+          summary: z.string().optional().describe('Nuevo enunciado de la idea (sustituye el anterior)'),
+          status: z.enum(['seed', 'developing', 'documented', 'archived']).optional().describe('Forzar un estado (normalmente no hace falta)'),
+          title: z.string().optional().describe('Nuevo título, si la idea se ha concretado'),
+        },
+      },
+      async ({ page_id, steps, summary, status, title }) => {
+        try {
+          const page = await (await api(`/api/pages/${page_id}`)).json();
+          if (page.kind !== 'idea') return fail(new Error('Esa página no es una idea (list_ideas las lista)'));
+          const body = { steps_add: steps.map((s) => ({ ...s, by: 'claude' })) };
+          if (summary !== undefined) body.summary = summary;
+          if (status !== undefined) body.status = status;
+          if (title !== undefined) body.title = title;
+          const r = await (await api(`/api/pages/${page_id}/idea`, { method: 'POST', body: JSON.stringify(body) })).json();
+          return ok(`Idea "${r.title}" actualizada: ${r.idea.steps.length} paso(s) en total, estado ${r.idea.status}.`);
+        } catch (e) {
+          return fail(e);
+        }
+      }
+    );
+
+    server.registerTool(
+      'materialize_idea',
+      {
+        title: 'Materializar idea',
+        description:
+          'Registra dónde se ha materializado una idea y la marca como documentada. Flujo: primero crea el resultado con la herramienta normal (create_page para documentación o un plan, create_canvas para diagramas/mapas, attach_file para Word/Excel/PowerPoint, o un documento externo), y después llama a esta con sus ids/urls. Una idea puede tener varios resultados (documento + diagrama + planning). Enlaza desde la página creada a la idea con [💡 título](/p/<idea_id>) para que queden conectadas en el grafo.',
+        inputSchema: {
+          page_id: z.string().describe('Id de la idea'),
+          outcomes: z.array(outcomeSchema).min(1).max(20).describe('Resultados a registrar'),
+          status: z.enum(['developing', 'documented', 'archived']).optional().describe('Estado final (por defecto, documented)'),
+          summary: z.string().optional().describe('Enunciado final de la idea, si cambia'),
+        },
+      },
+      async ({ page_id, outcomes, status, summary }) => {
+        try {
+          const page = await (await api(`/api/pages/${page_id}`)).json();
+          if (page.kind !== 'idea') return fail(new Error('Esa página no es una idea (list_ideas las lista)'));
+          for (const o of outcomes) {
+            if (['page', 'canvas', 'plan'].includes(o.type) && !o.page_id) return fail(new Error(`Resultado "${o.type}": falta page_id`));
+            if (o.type === 'file' && !o.file_id) return fail(new Error('Resultado "file": falta file_id'));
+            if (o.type === 'external' && !o.url) return fail(new Error('Resultado "external": falta url'));
+          }
+          const body = { outcomes_add: outcomes, status: status || 'documented' };
+          if (summary !== undefined) body.summary = summary;
+          const r = await (await api(`/api/pages/${page_id}/idea`, { method: 'POST', body: JSON.stringify(body) })).json();
+          return ok(
+            `Idea "${r.title}" materializada (${r.idea.status}): ${r.idea.outcomes.length} resultado(s) en total:\n` +
+              r.idea.outcomes.map((o) => `- ${o.type}${o.label ? ` «${o.label}»` : ''}: ${o.page_id ? `/p/${o.page_id}` : o.url || o.file_id}`).join('\n')
+          );
         } catch (e) {
           return fail(e);
         }

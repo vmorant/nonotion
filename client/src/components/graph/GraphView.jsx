@@ -75,6 +75,7 @@ export function GraphSettings({ settings, onChange, local, onAnimate, onClose })
         <Toggle label="Adjuntos" value={settings.showAttachments} onChange={set('showAttachments')} />
         <Toggle label="Huérfanas (sin enlaces)" value={settings.showOrphans} onChange={set('showOrphans')} />
         <Toggle label="Jerarquía (página → subpáginas)" value={settings.showHierarchy} onChange={set('showHierarchy')} />
+        <Toggle label="Ideas (rombos)" value={settings.showIdeas} onChange={set('showIdeas')} />
       </Section>
       <Section title="Grupos" defaultOpen={settings.groups.length > 0}>
         {settings.groups.map((g, i) => (
@@ -187,6 +188,7 @@ export default function GraphView({ data, settings, onSettings, focusId = null, 
       bg: cssVar('--bg', '#0e0f12'),
       tag: '#2ecc8f',
       file: cssVar('--text-faint', '#5c6373'),
+      idea: cssVar('--idea', '#ffc53d'),
       canvas: '#9b6bff',
     };
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
@@ -240,11 +242,20 @@ export default function GraphView({ data, settings, onSettings, focusId = null, 
       const lit = !hov || neighbors.has(n.id);
       ctx.globalAlpha = lit ? 1 : 0.18;
       const base =
-        n.color || (n.kind === 'tag' ? colors.tag : n.kind === 'file' ? colors.file : n.kind === 'canvas' ? colors.canvas : colors.node);
+        n.color ||
+        (n.kind === 'tag' ? colors.tag : n.kind === 'file' ? colors.file : n.kind === 'canvas' ? colors.canvas : n.kind === 'idea' ? colors.idea : colors.node);
       ctx.fillStyle = n.id === focusId || (hov && n.id === hov.id) ? colors.accent : base;
       ctx.beginPath();
       if (n.kind === 'file') ctx.rect(n.x - n.r, n.y - n.r, n.r * 2, n.r * 2);
-      else ctx.arc(n.x, n.y, n.r, 0, Math.PI * 2);
+      else if (n.kind === 'idea') {
+        // rombo: una idea es distinta de una página
+        const r = n.r * 1.25;
+        ctx.moveTo(n.x, n.y - r);
+        ctx.lineTo(n.x + r, n.y);
+        ctx.lineTo(n.x, n.y + r);
+        ctx.lineTo(n.x - r, n.y);
+        ctx.closePath();
+      } else ctx.arc(n.x, n.y, n.r, 0, Math.PI * 2);
       ctx.fill();
       if (n.id === focusId) {
         ctx.strokeStyle = colors.accent;

@@ -9,6 +9,7 @@ export const DEFAULTS = {
   showAttachments: false,
   showOrphans: true,
   showHierarchy: true, // extra de NoNotion: enlaces padre → hija del árbol
+  showIdeas: true, // ideas (fuera del árbol) y sus enlaces a páginas
   // Grupos: [{ query, color }]
   groups: [],
   // Visualización
@@ -60,24 +61,26 @@ export function buildGraph(data, settings, { focusId = null } = {}) {
     return parts.join(' / ');
   };
 
-  let nodes = data.pages.map((p) => ({
+  const pagesShown = s.showIdeas ? data.pages : data.pages.filter((p) => p.kind !== 'idea');
+  const shownIds = new Set(pagesShown.map((p) => p.id));
+  let nodes = pagesShown.map((p) => ({
     id: p.id,
-    kind: p.kind === 'canvas' ? 'canvas' : 'page',
+    kind: p.kind === 'canvas' ? 'canvas' : p.kind === 'idea' ? 'idea' : 'page',
     label: p.title || 'Sin título',
     icon: p.icon,
     tags: p.tags || [],
     created: p.created_at,
     path: pathOf(p),
   }));
-  let links = data.links.map((l) => ({ source: l.source, target: l.target, type: 'link' }));
+  let links = data.links.filter((l) => shownIds.has(l.source) && shownIds.has(l.target)).map((l) => ({ source: l.source, target: l.target, type: 'link' }));
   if (s.showHierarchy) {
-    for (const p of data.pages) {
-      if (p.parent_id && pageById.has(p.parent_id)) links.push({ source: p.parent_id, target: p.id, type: 'tree' });
+    for (const p of pagesShown) {
+      if (p.parent_id && shownIds.has(p.parent_id)) links.push({ source: p.parent_id, target: p.id, type: 'tree' });
     }
   }
   if (s.showTags) {
     const tags = new Map();
-    for (const p of data.pages) {
+    for (const p of pagesShown) {
       for (const t of p.tags || []) {
         if (!tags.has(t)) tags.set(t, { id: `tag:${t}`, kind: 'tag', label: `#${t}`, tags: [t], created: p.created_at });
         links.push({ source: p.id, target: `tag:${t}`, type: 'tag' });
@@ -87,7 +90,7 @@ export function buildGraph(data, settings, { focusId = null } = {}) {
   }
   if (s.showAttachments) {
     for (const f of data.files) {
-      if (!pageById.has(f.page_id)) continue;
+      if (!shownIds.has(f.page_id)) continue;
       nodes.push({ id: `file:${f.id}`, kind: 'file', label: f.name, file: f, tags: [], created: f.created_at });
       links.push({ source: f.page_id, target: `file:${f.id}`, type: 'file' });
     }

@@ -24,6 +24,20 @@ import {
   pageIdOfFile,
   fileIdOfFile,
 } from './canvas.js';
+import {
+  IdeaError,
+  parseIdea,
+  normalizeIdea,
+  patchIdea,
+  ideaText,
+  ideaToMarkdown,
+  ideaLinkedPageIds,
+  ideaTitleFrom,
+  ideaDigest,
+} from './idea.js';
+
+// Páginas a las que apunta un contenido, sea documento, canvas o idea
+const pageLinks = (content) => (parseIdea(content) ? ideaLinkedPageIds(content) : linkedPageIds(content));
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PORT = process.env.PORT || 3000;
@@ -161,12 +175,31 @@ const validDate = (v) => (typeof v === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(v)
 
 app.post('/api/pages', (req, res) => {
   const { parent_id = null, title = '', icon = '', content = null, page_date = null } = req.body || {};
-  const kind = req.body?.kind === 'canvas' ? 'canvas' : 'doc';
+  const kind = ['canvas', 'idea'].includes(req.body?.kind) ? req.body.kind : 'doc';
   if (parent_id && !pageInWs(parent_id, req.ws)) return res.status(400).json({ error: 'Padre inexistente' });
+  if (kind === 'idea' && parent_id) return res.status(400).json({ error: 'Las ideas viven fuera del árbol: no llevan padre' });
   // Canvas: JSON Canvas validado (vacío si no se da); documento: content opcional
   // como string = markdown crudo (mismo mecanismo que /api/capture)
   let raw = typeof content === 'string' ? content : '';
   let text = raw;
+  let pageTitle = typeof title === 'string' ? title : '';
+  let pageIcon = typeof icon === 'string' ? icon : '';
+  if (kind === 'idea') {
+    try {
+      const c = normalizeIdea(content);
+      for (const sd of c.seeds) {
+        if (sd.page_id && !pageInWs(sd.page_id, req.ws)) throw new IdeaError(`La página ${sd.page_id} no existe en este espacio`);
+        if (sd.file_id && !fileInWs(sd.file_id, req.ws)) throw new IdeaError(`El archivo ${sd.file_id} no existe en este espacio`);
+      }
+      raw = JSON.stringify(c);
+      text = ideaText(c);
+      if (!pageTitle.trim()) pageTitle = ideaTitleFrom(c.summary || c.seeds.find((x) => x.text)?.text, 'Idea');
+      if (!pageIcon) pageIcon = '💡';
+    } catch (e) {
+      if (e instanceof IdeaError) return res.status(400).json({ error: e.message });
+      throw e;
+    }
+  }
   if (kind === 'canvas') {
     try {
       const c = content ? normalizeCanvas(content) : EMPTY_CANVAS;
@@ -183,8 +216,8 @@ app.post('/api/pages', (req, res) => {
     .get(parent_id, req.ws).p;
   db.prepare(
     'INSERT INTO pages (id, parent_id, title, icon, content, content_text, position, page_date, workspace_id, kind) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
-  ).run(id, parent_id, title, icon, raw, text, pos, validDate(page_date), req.ws, kind);
-  ftsUpsert(id, title, text);
+  ).run(id, parent_id, pageTitle, pageIcon, raw, text, pos, validDate(page_date), req.ws, kind);
+  ftsUpsert(id, pageTitle, text);
   notifyTree(req);
   res.json(db.prepare('SELECT * FROM pages WHERE id = ?').get(id));
 });
@@ -206,18 +239,18 @@ app.get('/api/pages/:id', (req, res) => {
 // Páginas que enlazan a esta (enlaces internos /p/<id>)
 app.get('/api/pages/:id/backlinks', (req, res) => {
   if (!/^[A-Za-z0-9_-]+$/.test(req.params.id)) return res.json([]);
-  const exact = new RegExp(`/p/${req.params.id}(?![A-Za-z0-9_-])`);
+  // instr es solo un prefiltro: el enlace real lo decide pageLinks (documentos,
+  // canvas e ideas, que guardan los ids sin el prefijo /p/)
   const rows = db
     .prepare(
-      `SELECT id, title, icon FROM pages
-       WHERE trashed_at IS NULL AND workspace_id = ? AND id != ? AND instr(content, '/p/' || ?) > 0
-       ORDER BY updated_at DESC LIMIT 100`
+      `SELECT id, title, icon, kind, content FROM pages
+       WHERE trashed_at IS NULL AND workspace_id = ? AND id != ? AND instr(content, ?) > 0
+       ORDER BY updated_at DESC LIMIT 400`
     )
     .all(req.ws, req.params.id, req.params.id)
-    .filter((p) => {
-      // instr no distingue un id que sea prefijo de otro
-      return exact.test(db.prepare('SELECT content FROM pages WHERE id = ?').get(p.id).content);
-    });
+    .filter((p) => pageLinks(p.content).has(req.params.id))
+    .slice(0, 100)
+    .map(({ content, ...p }) => p);
   res.json(rows);
 });
 
@@ -233,7 +266,7 @@ app.get('/api/graph', (req, res) => {
   const alive = new Set(pages.map((p) => p.id));
   const links = [];
   for (const p of pages) {
-    for (const target of linkedPageIds(p.content)) {
+    for (const target of pageLinks(p.content)) {
       if (target !== p.id && alive.has(target)) links.push({ source: p.id, target });
     }
   }
@@ -291,6 +324,17 @@ app.put('/api/pages/:id', (req, res) => {
       fields.content_text = canvasText(c);
     } catch (e) {
       if (e instanceof CanvasError) return res.status(400).json({ error: `Esta página es un canvas: ${e.message}` });
+      throw e;
+    }
+  }
+  // Una idea solo admite su JSON (la interfaz y el MCP usan /idea para parches)
+  if (page.kind === 'idea' && fields.content !== undefined) {
+    try {
+      const c = normalizeIdea(fields.content);
+      fields.content = JSON.stringify(c);
+      fields.content_text = ideaText(c);
+    } catch (e) {
+      if (e instanceof IdeaError) return res.status(400).json({ error: `Esta página es una idea: ${e.message}` });
       throw e;
     }
   }
@@ -717,8 +761,14 @@ app.get('/api/pages/:id/markdown', async (req, res) => {
   const page = db.prepare('SELECT * FROM pages WHERE id = ?').get(req.params.id);
   if (!page) return res.status(404).json({ error: 'Página no encontrada' });
   const isCanvas = page.kind === 'canvas';
+  const isIdea = page.kind === 'idea';
   const titleOf = (pid) => db.prepare('SELECT title FROM pages WHERE id = ? AND workspace_id = ?').get(pid, page.workspace_id)?.title;
-  const markdown = isCanvas ? canvasToMarkdown(page.content, titleOf) : await docToMarkdown(page.content);
+  const fileOf = (fid) => db.prepare('SELECT id, name FROM files WHERE id = ? AND workspace_id = ? AND deleted_at IS NULL').get(fid, page.workspace_id);
+  const markdown = isIdea
+    ? ideaToMarkdown(page.content, { titleOf, fileOf })
+    : isCanvas
+      ? canvasToMarkdown(page.content, titleOf)
+      : await docToMarkdown(page.content);
   const files = db
     .prepare('SELECT id, name, mime, size FROM files WHERE page_id = ? AND deleted_at IS NULL ORDER BY created_at')
     .all(page.id);
@@ -726,6 +776,7 @@ app.get('/api/pages/:id/markdown', async (req, res) => {
     id: page.id,
     kind: page.kind,
     canvas: isCanvas ? JSON.parse(page.content || '{}') : undefined,
+    idea: isIdea ? normalizeIdea(page.content) : undefined,
     title: page.title,
     icon: page.icon,
     page_date: page.page_date,
@@ -755,11 +806,14 @@ function saveDocWithVersion(req, page, doc) {
 
 // Añade Markdown al final sin reescribir lo existente
 const CANVAS_MD_ERROR = 'Esta página es un canvas: no admite Markdown. Usa update_canvas para cambiarla.';
+const IDEA_MD_ERROR =
+  'Esta página es una idea: no admite Markdown. Usa develop_idea / materialize_idea (o la vista Ideas) para cambiarla.';
+const notMarkdown = (page) => (page.kind === 'canvas' ? CANVAS_MD_ERROR : page.kind === 'idea' ? IDEA_MD_ERROR : null);
 
 app.post('/api/pages/:id/append', async (req, res) => {
   const page = db.prepare('SELECT * FROM pages WHERE id = ?').get(req.params.id);
   if (!page) return res.status(404).json({ error: 'Página no encontrada' });
-  if (page.kind === 'canvas') return res.status(400).json({ error: CANVAS_MD_ERROR });
+  if (notMarkdown(page)) return res.status(400).json({ error: notMarkdown(page) });
   const { markdown } = req.body || {};
   if (typeof markdown !== 'string' || !markdown.trim()) {
     return res.status(400).json({ error: 'Falta el campo "markdown"' });
@@ -777,7 +831,7 @@ app.post('/api/pages/:id/append', async (req, res) => {
 app.post('/api/pages/:id/replace', async (req, res) => {
   const page = db.prepare('SELECT * FROM pages WHERE id = ?').get(req.params.id);
   if (!page) return res.status(404).json({ error: 'Página no encontrada' });
-  if (page.kind === 'canvas') return res.status(400).json({ error: CANVAS_MD_ERROR });
+  if (notMarkdown(page)) return res.status(400).json({ error: notMarkdown(page) });
   const { find_text, replace_text } = req.body || {};
   if (typeof find_text !== 'string' || typeof replace_text !== 'string') {
     return res.status(400).json({ error: 'Faltan find_text y replace_text' });
@@ -986,6 +1040,119 @@ console.log(
 );
 const PREVIEWS_DIR = path.join(DATA_DIR, 'previews');
 fs.mkdirSync(PREVIEWS_DIR, { recursive: true });
+
+// ---------- OCR de capturas (semillas de ideas) ----------
+// tesseract es opcional: sin él, las capturas se guardan igual (Claude las ve
+// con read_attachment) pero su texto no entra en el buscador.
+const hasTesseract = spawnSync('tesseract', ['--version'], { stdio: 'ignore' }).status === 0;
+let ocrLangs = 'eng';
+if (hasTesseract) {
+  const out = spawnSync('tesseract', ['--list-langs'], { encoding: 'utf8' });
+  const langs = `${out.stdout || ''}${out.stderr || ''}`
+    .split('\n')
+    .map((l) => l.trim())
+    .filter((l) => /^[a-z_]{3,}$/.test(l) && l !== 'osd');
+  const wanted = ['spa', 'eng', 'cat'].filter((l) => langs.includes(l));
+  ocrLangs = wanted.length ? wanted.join('+') : langs[0] || 'eng';
+}
+console.log(
+  hasTesseract
+    ? `tesseract detectado: OCR de capturas en ideas activado (${ocrLangs})`
+    : 'tesseract no encontrado: las capturas de ideas no serán buscables por su texto (apt install tesseract-ocr tesseract-ocr-spa)'
+);
+
+function ocrImage(filePath) {
+  if (!hasTesseract) return Promise.resolve('');
+  return new Promise((resolve) => {
+    execFile('tesseract', [filePath, 'stdout', '-l', ocrLangs], { timeout: 60000, maxBuffer: 8 * 1024 * 1024 }, (err, stdout) =>
+      resolve(err ? '' : String(stdout).replace(/[ \t]+\n/g, '\n').replace(/\n{3,}/g, '\n\n').trim())
+    );
+  });
+}
+
+function fileInWs(fileId, ws) {
+  return !!db.prepare('SELECT 1 FROM files WHERE id = ? AND workspace_id = ? AND deleted_at IS NULL').get(fileId, ws);
+}
+
+// ---------- Ideas (desarrollo de ideas fuera del árbol) ----------
+
+const ideaRow = (r) => ({
+  id: r.id,
+  title: r.title,
+  icon: r.icon,
+  created_at: r.created_at,
+  updated_at: r.updated_at,
+  tags: splitTags(r.tags),
+  ...ideaDigest(r.content),
+});
+
+app.get('/api/ideas', (req, res) => {
+  const rows = db
+    .prepare(
+      `SELECT id, title, icon, content, created_at, updated_at, ${TAGS_COLUMN}
+       FROM pages WHERE kind = 'idea' AND trashed_at IS NULL AND workspace_id = ? ORDER BY updated_at DESC`
+    )
+    .all(req.ws);
+  res.json(rows.map(ideaRow));
+});
+
+// Parche de una idea: estado, resumen, y altas/bajas/ediciones de semillas,
+// pasos y resultados. Cada escritura deja la versión anterior en el historial.
+app.post('/api/pages/:id/idea', async (req, res) => {
+  const page0 = db.prepare('SELECT * FROM pages WHERE id = ?').get(req.params.id);
+  if (!page0) return res.status(404).json({ error: 'Página no encontrada' });
+  if (page0.kind !== 'idea') return res.status(400).json({ error: 'Esta página no es una idea' });
+  const b = req.body || {};
+  try {
+    // Referencias a archivos y páginas: del mismo espacio. Las capturas pasan
+    // por OCR antes de tocar la base de datos (es lento y asíncrono).
+    for (const sd of b.seeds_add || []) {
+      if (!sd || typeof sd !== 'object') continue;
+      if (sd.file_id) {
+        const f = db.prepare('SELECT * FROM files WHERE id = ? AND deleted_at IS NULL').get(sd.file_id);
+        if (!f || f.workspace_id !== req.ws) throw new IdeaError(`El archivo ${sd.file_id} no existe en este espacio`);
+        if (!sd.name) sd.name = f.name;
+        if ((f.mime || '').startsWith('image/') && f.mime !== 'image/svg+xml') {
+          if (sd.kind === 'file') sd.kind = 'image';
+          if (sd.kind === 'image' && !sd.ocr) sd.ocr = await ocrImage(path.join(FILES_DIR, f.id));
+        } else if (sd.kind === 'image') sd.kind = 'file';
+      }
+      if (sd.page_id && !pageInWs(sd.page_id, req.ws)) throw new IdeaError(`La página ${sd.page_id} no existe en este espacio`);
+    }
+    for (const o of b.outcomes_add || []) {
+      if (!o || typeof o !== 'object') continue;
+      if (o.page_id) {
+        const target = db.prepare('SELECT kind FROM pages WHERE id = ? AND workspace_id = ? AND trashed_at IS NULL').get(o.page_id, req.ws);
+        if (!target) throw new IdeaError(`La página ${o.page_id} no existe en este espacio`);
+        if (o.page_id === page0.id) throw new IdeaError('Una idea no puede ser su propio resultado');
+        if (target.kind === 'canvas' && o.type === 'page') o.type = 'canvas';
+      }
+      if (o.file_id && !fileInWs(o.file_id, req.ws)) throw new IdeaError(`El archivo ${o.file_id} no existe en este espacio`);
+    }
+    // Se relee la página: el OCR puede haber tardado y alguien (o Claude) haberla cambiado
+    const page = db.prepare('SELECT * FROM pages WHERE id = ?').get(page0.id);
+    const idea = patchIdea(page.content, b);
+    const content = JSON.stringify(idea);
+    const fields = { content, content_text: ideaText(idea) };
+    if (typeof b.title === 'string' && b.title.trim()) fields.title = b.title.trim().slice(0, 300);
+    if (typeof b.icon === 'string' && b.icon) fields.icon = b.icon.slice(0, 8);
+    // Cada paso, semilla o resultado es una acción discreta: siempre deja versión.
+    // Solo teclear el enunciado desde la interfaz se agrupa (una cada 10 min).
+    const onlySummary = Object.keys(b).every((k) => k === 'summary');
+    if (content !== page.content && page.content) snapshotVersion(page, { throttled: Boolean(req.headers['x-client-id']) && onlySummary });
+    const sets = Object.keys(fields).map((k) => `${k} = ?`).join(', ');
+    db.prepare(`UPDATE pages SET ${sets}, rev = rev + 1, updated_at = datetime('now') WHERE id = ?`).run(...Object.values(fields), page.id);
+    const updated = db.prepare('SELECT * FROM pages WHERE id = ?').get(page.id);
+    ftsUpsert(page.id, updated.title, updated.content_text);
+    logActivity(page.id);
+    notifyPage(req, page.id);
+    notifyTree(req); // la vista Ideas y el árbol (título, icono) se refrescan por el mismo aviso
+    res.json({ ...updated, idea });
+  } catch (e) {
+    if (e instanceof IdeaError) return res.status(400).json({ error: e.message });
+    throw e;
+  }
+});
 
 const OFFICE_EXT = new Set([
   '.doc', '.docx', '.xls', '.xlsx', '.ppt', '.pptx', '.odt', '.ods', '.odp', '.rtf',
@@ -1280,7 +1447,7 @@ app.get('/api/search', (req, res) => {
     if (!ids.length) return res.json([]);
     const rows = db
       .prepare(
-        `SELECT id, title, icon, NULL AS snippet FROM pages
+        `SELECT id, title, icon, kind, NULL AS snippet FROM pages
          WHERE workspace_id = ? AND id IN (${ids.map(() => '?').join(', ')}) ORDER BY updated_at DESC`
       )
       .all(req.ws, ...ids);
@@ -1293,7 +1460,7 @@ app.get('/api/search', (req, res) => {
   try {
     let rows = db
       .prepare(
-        `SELECT p.id, p.title, p.icon,
+        `SELECT p.id, p.title, p.icon, p.kind,
                 snippet(pages_fts, 2, char(2), char(3), '…', 14) AS snippet
          FROM pages_fts
          JOIN pages p ON p.id = pages_fts.page_id
@@ -1385,7 +1552,7 @@ app.get('/api/export', async (req, res) => {
   const canvases = []; // se escriben al final, cuando ya se conocen todas las rutas
 
   const addPages = async (parentId, dir, depth) => {
-    const kids = childrenMap.get(parentId) || [];
+    const kids = (childrenMap.get(parentId) || []).filter((p) => p.kind !== 'idea');
     const usedNames = new Set();
     for (const page of kids) {
       let base = sanitizeName(page.title);
@@ -1435,6 +1602,27 @@ app.get('/api/export', async (req, res) => {
   };
 
   await addPages(null, '', 0);
+
+  // Ideas: fuera del árbol, en su propia carpeta, como resumen en Markdown
+  const ideaNames = new Set();
+  for (const page of pages.filter((p) => p.kind === 'idea')) {
+    let base = sanitizeName(page.title);
+    let candidate = base;
+    let n = 2;
+    while (ideaNames.has(candidate.toLowerCase())) candidate = `${base} (${n++})`;
+    ideaNames.add(candidate.toLowerCase());
+    const titleOf = (pid) => pages.find((p) => p.id === pid)?.title || null;
+    const fileOf = (fid) => fileById.get(fid) || null;
+    let md = `# ${page.icon ? page.icon + ' ' : ''}${page.title || 'Sin título'}\n\n` + ideaToMarkdown(page.content, { titleOf, fileOf });
+    const pageFiles = allFiles.filter((f) => f.page_id === page.id);
+    if (pageFiles.length) {
+      md += '\n\n## Archivos adjuntos\n\n' + pageFiles.map((f) => {
+        usedFiles.add(f.id);
+        return `- [${f.name}](../${fileEntryName(f)})`;
+      }).join('\n') + '\n';
+    }
+    archive.append(md, { name: `Ideas/${candidate}.md` });
+  }
 
   // Canvas en formato JSON Canvas (.canvas), como Obsidian: las páginas y los
   // adjuntos se referencian por su ruta dentro del ZIP (el "vault")
