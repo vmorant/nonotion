@@ -6,6 +6,9 @@ import Attachments from './Attachments.jsx';
 import EmojiPicker from './EmojiPicker.jsx';
 import HistoryModal from './HistoryModal.jsx';
 import PageOutline from './PageOutline.jsx';
+import { Star, MoveHorizontal, History, Download, Share2, FilePlus2, Copy, Trash2 } from 'lucide-react';
+
+const ICON = { size: 16, strokeWidth: 1.8 };
 import { TagEditor } from './Tags.jsx';
 
 function breadcrumb(pages, id) {
@@ -462,24 +465,24 @@ export default function PageView({
             onClick={() => setPref('favorite', !favorite)}
             title={favorite ? 'Quitar de favoritas' : 'Añadir a favoritas (aparece arriba en la barra lateral)'}
           >
-            {favorite ? '★' : '☆'}
+            <Star {...ICON} fill={favorite ? 'currentColor' : 'none'} />
           </button>
           <button
             className={'btn' + (fullWidth ? ' active' : '')}
             onClick={() => setPref('full_width', !fullWidth)}
             title={fullWidth ? 'Volver al ancho normal' : 'Usar todo el ancho de la pantalla'}
           >
-            ↔
+            <MoveHorizontal {...ICON} />
           </button>
           <button className="btn" onClick={() => setHistoryOpen(true)} title="Historial de versiones">
-            🕘
+            <History {...ICON} />
           </button>
           <button className="btn" onClick={exportMarkdown} title="Exportar como Markdown">
-            ⬇ MD
+            <Download {...ICON} /> MD
           </button>
           <div className="share-wrap">
             <button className={'btn' + (shareToken ? ' shared' : '')} onClick={() => setShareOpen((v) => !v)}>
-              Compartir
+              <Share2 {...ICON} /> Compartir
             </button>
             {shareOpen && (
               <div className="share-popover">
@@ -504,13 +507,13 @@ export default function PageView({
             )}
           </div>
           <button className="btn" onClick={() => onCreateChild(id)} title="Añadir subpágina">
-            + Sub
+            <FilePlus2 {...ICON} />
           </button>
           <button className="btn" onClick={() => onDuplicate(id)} title="Duplicar página">
-            ⧉
+            <Copy {...ICON} />
           </button>
           <button className="btn danger" onClick={() => onDelete(id)} title="Mover a la papelera">
-            🗑
+            <Trash2 {...ICON} />
           </button>
         </div>
       </div>
