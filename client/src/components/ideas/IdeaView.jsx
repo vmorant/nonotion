@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import MarkdownIt from 'markdown-it';
 import { Sparkles, Plus, Trash2, Upload, Copy, Check, ExternalLink, FileText, LayoutDashboard, CalendarDays, Pencil } from 'lucide-react';
-import { api } from '../../api.js';
+import { api, markBusy, clearBusy } from '../../api.js';
 import { viewFile, safeHref } from '../../fileLinks.js';
 import {
   parseIdea,
@@ -260,10 +260,13 @@ export default function IdeaView({ pageId, title, initialContent, pages = [], fi
   const fileInput = useRef(null);
   const summaryTimer = useRef(null);
 
+  // Cambios remotos (Claude, otra pestaña): se actualizan las listas sin
+  // remontar, así no se pierde lo que se está escribiendo en los cuadros de texto.
+  // El enunciado solo se sobrescribe si no hay una edición propia pendiente.
   useEffect(() => {
     const next = parseIdea(initialContent);
     setIdea(next);
-    setSummary(next.summary || '');
+    if (!summaryTimer.current) setSummary(next.summary || '');
   }, [initialContent]);
 
   const patch = async (body) => {
@@ -283,13 +286,36 @@ export default function IdeaView({ pageId, title, initialContent, pages = [], fi
     }
   };
 
-  // Resumen: se guarda al dejar de teclear
+  // Resumen: se guarda al dejar de teclear; si se sale antes, se envía al salir
+  const pendingSummary = useRef(null);
   const changeSummary = (v) => {
     setSummary(v);
+    pendingSummary.current = v;
+    markBusy(`idea-summary:${pageId}`);
     clearTimeout(summaryTimer.current);
-    summaryTimer.current = setTimeout(() => patch({ summary: v }), 900);
+    summaryTimer.current = setTimeout(async () => {
+      summaryTimer.current = null;
+      const value = pendingSummary.current;
+      pendingSummary.current = null;
+      await patch({ summary: value });
+      if (pendingSummary.current === null) clearBusy(`idea-summary:${pageId}`);
+    }, 900);
   };
-  useEffect(() => () => clearTimeout(summaryTimer.current), []);
+  useEffect(
+    () => () => {
+      clearTimeout(summaryTimer.current);
+      summaryTimer.current = null;
+      if (pendingSummary.current !== null && !readOnly) {
+        const value = pendingSummary.current;
+        pendingSummary.current = null;
+        api
+          .patchIdea(pageId, { summary: value })
+          .catch(() => {})
+          .finally(() => clearBusy(`idea-summary:${pageId}`));
+      }
+    },
+    [pageId, readOnly]
+  );
 
   // ---------- Semilla ----------
   const addFiles = async (list) => {

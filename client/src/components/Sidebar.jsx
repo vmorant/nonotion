@@ -47,7 +47,9 @@ function TreeItem({ page, index, childrenMap, depth, onCreate, onDelete, onDupli
       onMove(draggedId, page.id, kids.length);
       setOpen(true);
     } else {
-      onMove(draggedId, page.parent_id, zone === 'before' ? index : index + 1);
+      // por id de la hermana: el índice visible no coincide con el del servidor
+      // (la página arrastrada aún cuenta, y las ideas no se ven en el árbol)
+      onMove(draggedId, page.parent_id, zone === 'before' ? { before_id: page.id } : { after_id: page.id });
     }
   };
 

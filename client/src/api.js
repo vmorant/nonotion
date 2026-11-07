@@ -163,8 +163,12 @@ export const api = {
   unshare: (id) => req(`/api/pages/${id}/share`, { method: 'DELETE' }),
   sharedPage: (token) => req(`/api/share/${token}`),
   deleteFile: (id) => req(`/api/files/${id}`, { method: 'DELETE' }),
-  movePage: (id, parentId, index) =>
-    req(`/api/pages/${id}/move`, { method: 'POST', body: JSON.stringify({ parent_id: parentId, index }) }),
+  // pos: índice, o { before_id } / { after_id } (preferible: no depende de lo que se ve en el árbol)
+  movePage: (id, parentId, pos) =>
+    req(`/api/pages/${id}/move`, {
+      method: 'POST',
+      body: JSON.stringify({ parent_id: parentId, ...(pos && typeof pos === 'object' ? pos : { index: pos }) }),
+    }),
   duplicatePage: (id) => req(`/api/pages/${id}/duplicate`, { method: 'POST' }),
   pagePrefs: (id, prefs) => req(`/api/pages/${id}/prefs`, { method: 'POST', body: JSON.stringify(prefs) }),
   sheets: (fileId) => req(`/files/${fileId}/sheets`),

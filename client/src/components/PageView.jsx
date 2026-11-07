@@ -117,6 +117,10 @@ export default function PageView({
   const again = useRef(false);
   const retries = useRef(0);
   const gen = useRef(0); // cambia al cambiar de página: invalida guardados en vuelo
+  const idRef = useRef(id); // página abierta AHORA (para descartar respuestas tardías de otra)
+  idRef.current = id;
+  const inFlightReq = useRef(null); // promesa del guardado en vuelo (para encadenar el de salida)
+  const halted = useRef(false); // 404/401: no seguir reintentando en bucle
 
   const persistDraft = useCallback((pid) => {
     if (Object.keys(unconfirmed.current).length) {
@@ -130,7 +134,12 @@ export default function PageView({
   }, []);
 
   const loadPage = useCallback(() => {
-    return api.page(id).then((p) => {
+    const want = id;
+    return api.page(want).then((p) => {
+      // Si mientras tanto se abrió otra página, esta respuesta llega tarde: se
+      // descarta (si no, el editor de C se montaba con el contenido de B y el
+      // primer guardado escribía B dentro de C)
+      if (idRef.current !== want || p.id !== want) return;
       revRef.current = p.rev ?? 0;
       wsSeenRef.current?.(p.workspace_id);
       setPage(p);
@@ -138,7 +147,10 @@ export default function PageView({
       setShareToken(p.share_token);
       const draft = readDraft(id);
       if (draft && draftDiffers(draft, p)) setDraftOffer(draft);
-      else if (draft) removeDraft(id);
+      else if (draft) {
+        removeDraft(id);
+        clearBusy(`page:${id}`); // si no, el aviso de "cambios sin guardar" se quedaba puesto
+      }
     });
   }, [id]);
 
@@ -154,7 +166,9 @@ export default function PageView({
     const myGen = gen.current;
     setStatus('saving');
     try {
-      const res = await api.updatePage(id, { ...data, base_rev: revRef.current });
+      const reqP = api.updatePage(id, { ...data, base_rev: revRef.current });
+      inFlightReq.current = reqP.catch(() => {});
+      const res = await reqP;
       if (myGen !== gen.current) return; // ya estamos en otra página
       revRef.current = res.rev;
       if (res.conflict) setConflictSaved(true);
@@ -170,10 +184,14 @@ export default function PageView({
       if (myGen !== gen.current) return;
       pending.current = { ...data, ...pending.current }; // se devuelve a la cola sin pisar lo nuevo
       if (e.status === 404) {
-        setStatus('error'); // la página ya no existe; el borrador queda en el navegador
+        halted.current = true; // la página ya no existe: no se reintenta en bucle
+        setStatus('error'); // el borrador queda en el navegador
         return;
       }
-      if (e.status === 401) return; // redirigiendo al login; el borrador sobrevive
+      if (e.status === 401) {
+        halted.current = true; // redirigiendo al login; el borrador sobrevive
+        return;
+      }
       retries.current += 1;
       setStatus('retrying');
       clearTimeout(saveTimer.current);
@@ -181,7 +199,8 @@ export default function PageView({
     } finally {
       if (myGen === gen.current) {
         inFlight.current = false;
-        if ((again.current || Object.keys(pending.current).length) && retries.current === 0) {
+        inFlightReq.current = null;
+        if (!halted.current && (again.current || Object.keys(pending.current).length) && retries.current === 0) {
           again.current = false;
           clearTimeout(saveTimer.current);
           saveTimer.current = setTimeout(flush, 0);
@@ -192,6 +211,21 @@ export default function PageView({
 
   const queueSave = useCallback(
     (data) => {
+      // Llamada desde una página que ya no está abierta (p. ej. una subida del
+      // canvas que termina después de salir): se guarda aparte, en SU página, sin
+      // tocar la cola de la página actual
+      if (idRef.current !== id) {
+        writeDraft(id, data, null);
+        markBusy(`page:${id}`);
+        api
+          .updatePage(id, data)
+          .then(() => {
+            removeDraft(id);
+            clearBusy(`page:${id}`);
+          })
+          .catch(() => clearBusy(`page:${id}`)); // queda el borrador: se ofrece al volver
+        return;
+      }
       if (!Object.keys(unconfirmed.current).length) draftBaseRev.current = revRef.current;
       pending.current = { ...pending.current, ...data };
       unconfirmed.current = { ...unconfirmed.current, ...data };
@@ -231,17 +265,23 @@ export default function PageView({
     inFlight.current = false;
     again.current = false;
     retries.current = 0;
+    halted.current = false;
+    inFlightReq.current = null;
     loadPage();
     const pid = id;
     return () => {
       clearTimeout(saveTimer.current);
       clearTimeout(liveTimer.current);
-      // Al salir de la página se envía lo que quedara pendiente, sin esperar.
+      // Al salir de la página se envía lo que quedara pendiente. Si había un
+      // guardado en vuelo, se espera a que termine: si no, podía llegar después
+      // y pisar lo último escrito con una versión anterior.
       // Si falla, el borrador local de esta página lo conserva.
       const leftover = { ...unconfirmed.current };
+      const prev = inFlightReq.current || Promise.resolve();
+      const baseRev = revRef.current;
       if (Object.keys(leftover).length) {
-        api
-          .updatePage(pid, { ...leftover, base_rev: revRef.current })
+        prev
+          .then(() => api.updatePage(pid, { ...leftover, base_rev: baseRev }))
           .then(() => {
             removeDraft(pid);
             clearBusy(`page:${pid}`);
@@ -612,7 +652,7 @@ export default function PageView({
 
         {isIdea ? (
           <IdeaView
-            key={`${id}:${reloadKey}`}
+            key={id}
             pageId={id}
             title={page.title}
             pages={pages}
