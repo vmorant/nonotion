@@ -704,8 +704,8 @@ export default function IdeaView({ pageId, title, initialContent, pages = [], fi
                 <button className="btn" onClick={() => createOutcome('plan')} disabled={busy} title="Crea una página de planificación con hitos y tareas, fijada a hoy en el calendario">
                   <CalendarDays {...ICON} /> Crear planning
                 </button>
-                <button className="btn" onClick={() => setIssueOpen(true)} disabled={busy} title="Convierte la idea en un elemento de seguimiento (tarea, riesgo, decisión…) enlazado a ella">
-                  <ListChecks {...ICON} /> Crear elemento
+                <button className="btn" onClick={() => setIssueOpen(true)} disabled={busy} title="Convierte la idea en un ticket de una lista de seguimiento, enlazado a ella">
+                  <ListChecks {...ICON} /> Crear ticket
                 </button>
               </div>
               <div className="idea-create-row">

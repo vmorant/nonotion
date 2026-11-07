@@ -89,7 +89,7 @@ function TreeItem({ page, index, childrenMap, depth, onCreate, onDelete, onDupli
             <span className="tree-dot" />
           )}
         </button>
-        <span className="tree-icon">{page.icon || (page.kind === 'canvas' ? '🧩' : '📄')}</span>
+        <span className="tree-icon">{page.icon || (page.kind === 'canvas' ? '🧩' : page.kind === 'tracker' ? '📋' : '📄')}</span>
         <span className="tree-title">{page.title || 'Sin título'}</span>
         {page.shared ? (
           <span className="tree-shared" title="Compartida públicamente">
@@ -97,6 +97,7 @@ function TreeItem({ page, index, childrenMap, depth, onCreate, onDelete, onDupli
           </span>
         ) : null}
         <span className="tree-actions" onClick={(e) => e.preventDefault()}>
+          {page.kind !== 'tracker' && (
           <button
             title="Añadir subpágina"
             onClick={(e) => {
@@ -106,6 +107,7 @@ function TreeItem({ page, index, childrenMap, depth, onCreate, onDelete, onDupli
           >
             <Plus size={14} />
           </button>
+          )}
           <button
             title="Más opciones"
             onClick={(e) => {
@@ -127,22 +129,36 @@ function TreeItem({ page, index, childrenMap, depth, onCreate, onDelete, onDupli
           >
             Abrir
           </button>
+          {page.kind !== 'tracker' && (
           <button
-            onClick={() => {
-              setMenuOpen(false);
-              onCreate(page.id);
-            }}
-          >
-            Añadir subpágina
-          </button>
+              onClick={() => {
+                setMenuOpen(false);
+                onCreate(page.id);
+              }}
+            >
+              Añadir subpágina
+            </button>
+          )}
+          {page.kind !== 'tracker' && (
           <button
-            onClick={() => {
-              setMenuOpen(false);
-              onCreate(page.id, 'canvas');
-            }}
-          >
-            Añadir canvas dentro
-          </button>
+              onClick={() => {
+                setMenuOpen(false);
+                onCreate(page.id, 'canvas');
+              }}
+            >
+              Añadir canvas dentro
+            </button>
+          )}
+          {page.kind !== 'tracker' && (
+          <button
+              onClick={() => {
+                setMenuOpen(false);
+                onCreate(page.id, 'tracker');
+              }}
+            >
+              Añadir lista de seguimiento dentro
+            </button>
+          )}
           <button
             onClick={() => {
               setMenuOpen(false);
@@ -331,11 +347,11 @@ export default function Sidebar({
 
   // Las ideas viven en su propia vista, no en el árbol
   const ideasCount = pages.filter((p) => p.kind === 'idea').length;
-  const activeIssues = pages.filter((p) => p.kind === 'issue' && ['open', 'in_progress', 'blocked'].includes(p.issue_status));
+  const activeIssues = pages.filter((p) => p.kind === 'issue' && ['todo', 'doing', 'blocked'].includes(p.issue_status));
   const blockedIssues = activeIssues.filter((p) => p.issue_status === 'blocked').length;
   const childrenMap = new Map();
   for (const p of pages) {
-    if (p.kind === 'idea' || p.kind === 'issue') continue; // viven en sus propias vistas
+    if (p.kind === 'idea' || p.kind === 'issue') continue; // viven en sus propias vistas (los tickets, dentro de su lista)
     const key = p.parent_id || null;
     if (!childrenMap.has(key)) childrenMap.set(key, []);
     childrenMap.get(key).push(p);

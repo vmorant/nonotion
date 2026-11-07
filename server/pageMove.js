@@ -73,7 +73,7 @@ function moveOne(ws, move) {
   const page = livePage(move.page_id, ws, 'origen');
   // Las ideas viven fuera del árbol (vista Ideas): no se mueven ni contienen páginas
   if (page.kind === 'idea') throw new MoveError(`${label(page)} es una idea: las ideas no están en el árbol de páginas`);
-  if (page.kind === 'issue') throw new MoveError(`${label(page)} es un elemento de seguimiento: no está en el árbol de páginas`);
+  if (page.kind === 'issue') throw new MoveError(`${label(page)} es un ticket: vive dentro de su lista de seguimiento`);
   if (move.parent_id === undefined) {
     throw new MoveError('Falta el padre destino (usa null para mover a la raíz del espacio)');
   }
@@ -82,7 +82,9 @@ function moveOne(ws, move) {
   if (parentId !== null) {
     const parent = livePage(parentId, ws, 'destino');
     if (parent.kind === 'idea') throw new MoveError(`${label(parent)} es una idea: no puede contener páginas`);
-    if (parent.kind === 'issue') throw new MoveError(`${label(parent)} es un elemento de seguimiento: no puede contener páginas`);
+    if (parent.kind === 'issue' || parent.kind === 'tracker') {
+      throw new MoveError(`${label(parent)} es ${parent.kind === 'issue' ? 'un ticket' : 'una lista de seguimiento'}: no puede contener páginas`);
+    }
     if (parent.id === page.id) throw new MoveError(`Una página no puede moverse dentro de sí misma (${label(page)})`);
     const descendants = subtreeStmt.all(page.id).map((r) => r.id);
     if (descendants.includes(parent.id)) {

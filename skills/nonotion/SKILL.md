@@ -73,26 +73,29 @@ Antes de crear, busca por si ya existe una página del tema y ofrécela.
   append/edit/update_page en un canvas. Coloca las tarjetas sin solaparse.
 - **Enlazar páginas** con `[Título](/p/<id>)` hace que aparezcan conectadas en
   el grafo de NoNotion.
-- **Seguimiento** (elementos fuera del árbol; vista Seguimiento): bloqueos,
-  problemas, riesgos, tareas, decisiones y preguntas con clave por espacio
-  (`AXA-12`), estado (open → in_progress → blocked → resolved → closed),
-  prioridad, responsable (usuario de GitHub o nombre libre), fecha límite e
-  hito, y una descripción en Markdown normal.
-  - Consultar libremente: "¿qué está bloqueado en AXA?" → `list_issues`
-    (`blocked_only`), "¿qué tengo abierto?" → `list_issues` (`status: active`,
-    `assignee`). Para el detalle, `read_page` del elemento (campos,
-    descripción, relaciones y cronología).
-  - Crear solo cuando el usuario lo pida ("apúntalo como bloqueo", "crea los
-    elementos de esta reunión"): antes `list_issues` para no duplicar. Título
-    corto y concreto; tipo y prioridad realistas; relaciónalo al crear
-    (`links`): `origin` con el acta o página de la que sale, `documents` con
-    la página de AXA que lo documenta, `blocks` si frena a otro elemento. De
-    una idea, `create_issue` con `from_idea_id`.
-  - Avances: `update_issue` con `comment` (queda en la cronología con fecha y
-    autor) y el cambio de estado cuando el usuario lo confirme. No cierres ni
-    cambies responsables por tu cuenta.
-  - En cualquier página, escribir la clave (`AXA-12`) la enlaza al elemento.
-    No uses `move_page` con elementos (no están en el árbol).
+- **Seguimiento** (listas de tickets como un Jira ligero): cada **lista** es una
+  página del árbol (p. ej. "Bloqueantes AXA", "To-do") con su prefijo (`BLQ`),
+  sus estados (cada uno con categoría todo/doing/blocked/done) y sus propios
+  campos (desplegables, fechas, personas…). Los **tickets** viven dentro de su
+  lista con clave `BLQ-12`, descripción en Markdown normal, relaciones y
+  cronología.
+  - Consultar libremente: `list_trackers` (listas, campos y opciones),
+    `list_issues` ("¿qué está bloqueado?" → `blocked_only`; "lo de Juan" →
+    `fields: {"Responsable": "Juan"}`; "abiertos de To-do" → `tracker`,
+    `category: active`). Detalle: `read_page` del ticket o de la lista.
+  - Crear solo cuando el usuario lo pida: elige la lista adecuada (pregunta si
+    hay dudas) y rellena sus campos por nombre (`fields`), con las opciones
+    existentes; antes `list_issues` para no duplicar. Relaciona al crear
+    (`links`): `origin` con el acta o página de la que sale, `documents` con la
+    página que lo documenta, `blocks` si frena a otro ticket. De una idea,
+    `from_idea_id`. Una lista nueva (`create_tracker`, plantilla blockers,
+    todo, topics o blank) o un campo nuevo (`update_tracker`) solo si el
+    usuario lo pide.
+  - Avances: `update_issue` con `comment` (queda con fecha y autor) y el cambio
+    de estado cuando el usuario lo confirme. No cierres tickets ni cambies
+    responsables por tu cuenta.
+  - Escribir la clave (`BLQ-12`) en cualquier página la enlaza. No uses
+    `move_page` con tickets ni crees páginas dentro de una lista.
 - **Ideas** (desarrollo de ideas, fuera del árbol; vista Ideas): una idea
   separa **semilla** (lo que llegó: texto, captura, enlace, fragmento de una
   página; no se reescribe), **desarrollo** (pasos fechados) y **resultado**

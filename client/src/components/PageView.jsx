@@ -12,6 +12,7 @@ import LocalGraphPanel from './graph/LocalGraphPanel.jsx';
 import IdeaView from './ideas/IdeaView.jsx';
 import { IssueFields, IssueActivity, IssueRefLink, useIssue } from './issues/IssuePanel.jsx';
 import NewIssueDialog from './issues/NewIssueDialog.jsx';
+import TrackerView from './issues/TrackerView.jsx';
 import { LINK_INVERSE } from './issues/model.js';
 
 const ICON = { size: 16, strokeWidth: 1.8 };
@@ -185,6 +186,13 @@ export default function PageView({
       persistDraft(id);
       retries.current = 0;
       setStatus(Object.keys(pending.current).length ? 'saving' : 'saved');
+      // las claves de tickets (BLQ-12) que se acaban de escribir aparecen abajo
+      if (data.content_text !== undefined) {
+        api
+          .pageIssues(id)
+          .then((r) => myGen === gen.current && setPageIssues(r))
+          .catch(() => {});
+      }
       if (data.title !== undefined || data.icon !== undefined) onTreeChange();
     } catch (e) {
       if (myGen !== gen.current) return;
@@ -388,8 +396,9 @@ export default function PageView({
   const isCanvas = page.kind === 'canvas';
   const isIdea = page.kind === 'idea';
   const isIssue = page.kind === 'issue';
-  const isDoc = !isCanvas && !isIdea && !isIssue;
-  const hasEditor = !isCanvas && !isIdea; // documentos y descripción de elementos
+  const isTracker = page.kind === 'tracker';
+  const isDoc = !isCanvas && !isIdea && !isIssue && !isTracker;
+  const hasEditor = !isCanvas && !isIdea && !isTracker; // documentos y descripción de tickets
 
   // "Crear elemento" desde una página: la selección sirve de título
   const openNewIssue = () => {
@@ -539,11 +548,10 @@ export default function PageView({
               <span className="crumb-sep">/</span>
             </span>
           )}
-          {isIssue && (
+          {(isIssue || isTracker) && (
             <span>
               <Link to="/issues">📋 Seguimiento</Link>
               <span className="crumb-sep">/</span>
-              {issue.detail && <span className="issue-key">{issue.detail.key}</span>}
             </span>
           )}
           {crumbs.map((c, i) => (
@@ -597,7 +605,7 @@ export default function PageView({
             </button>
           )}
           {isDoc && (
-            <button className="btn" onClick={openNewIssue} title="Crear elemento de seguimiento (bloqueo, problema, tarea…) relacionado con esta página; la selección se usa como título">
+            <button className="btn" onClick={openNewIssue} title="Crear ticket de seguimiento (bloqueo, tarea, tema…) relacionado con esta página; la selección se usa como título">
               <ListChecks {...ICON} />
             </button>
           )}
@@ -644,12 +652,12 @@ export default function PageView({
               </div>
             )}
           </div>
-          {!isIdea && !isIssue && (
+          {isDoc && (
             <button className="btn" onClick={() => onCreateChild(id)} title="Añadir subpágina">
               <FilePlus2 {...ICON} />
             </button>
           )}
-          {!isIssue && (
+          {!isIssue && !isTracker && (
             <button className="btn" onClick={() => onDuplicate(id)} title="Duplicar página">
               <Copy {...ICON} />
             </button>
@@ -661,7 +669,11 @@ export default function PageView({
       </div>
 
       <div className="page-columns">
-      <div className={'page-body' + (fullWidth || isCanvas || isIdea ? ' full' : '') + (isCanvas ? ' is-canvas' : '') + (isIdea ? ' is-idea' : '')}>
+      <div
+        className={
+          'page-body' + (fullWidth || isCanvas || isIdea || isTracker ? ' full' : '') + (isCanvas ? ' is-canvas' : '') + (isIdea ? ' is-idea' : '') + (isTracker ? ' is-tracker' : '')
+        }
+      >
         <div className="page-head">
           <button className="page-icon" onClick={() => setEmojiOpen((v) => !v)} title="Cambiar icono">
             {page.icon || '📄'}
@@ -701,7 +713,9 @@ export default function PageView({
         )}
         {isIssue && issue.error && <div className="issue-error">⚠ {issue.error}</div>}
 
-        {isIdea ? (
+        {isTracker ? (
+          <TrackerView key={id} pageId={id} pageEvent={pageEvent} members={members} onTreeChange={onTreeChange} />
+        ) : isIdea ? (
           <IdeaView
             key={id}
             pageId={id}
@@ -741,7 +755,7 @@ export default function PageView({
         />
         )}
 
-        {!isCanvas && <Attachments pageId={id} files={files} onChange={setFiles} />}
+        {!isCanvas && !isTracker && <Attachments pageId={id} files={files} onChange={setFiles} />}
 
         {isIssue && issue.detail && (
           <IssueActivity
@@ -754,9 +768,9 @@ export default function PageView({
           />
         )}
 
-        {!isIssue && (pageIssues.linked.length > 0 || pageIssues.mentioned.length > 0) && (
+        {!isIssue && !isTracker && (pageIssues.linked.length > 0 || pageIssues.mentioned.length > 0) && (
           <section className="backlinks page-issues">
-            <div className="backlinks-title">📋 Elementos de seguimiento</div>
+            <div className="backlinks-title">📋 Tickets de seguimiento</div>
             {pageIssues.linked.map((l) => (
               <div key={`l${l.link_id}`} className="page-issue-row">
                 <span className="page-issue-rel">{l.type === 'documents' ? 'Lo documenta' : l.type === 'origin' ? 'Salió de aquí' : LINK_INVERSE[l.type]}</span>
@@ -794,7 +808,6 @@ export default function PageView({
         <NewIssueDialog
           initial={{ title: newIssue.title }}
           context={{ id, title: page.title, icon: page.icon, type: 'origin' }}
-          members={members}
           onClose={() => setNewIssue(null)}
           onCreate={async (body) => {
             const d = await api.createIssue(body);

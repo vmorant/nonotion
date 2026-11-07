@@ -6,7 +6,7 @@
 // ANTES de todas las rutas: resuelve el espacio de lo que se pide y corta con
 // 404 (como si no existiera) lo ajeno. Las rutas solo consultan `req.ws`.
 import crypto from 'crypto';
-import db, { DEFAULT_WORKSPACE, instanceOwners, ftsUpsert } from './db.js';
+import db, { DEFAULT_WORKSPACE, instanceOwners } from './db.js';
 
 export const ROLES = ['admin', 'editor'];
 const ID = '[A-Za-z0-9_-]+';
@@ -223,7 +223,7 @@ export function liveParentInWs(pageId, ws) {
   return Boolean(
     pageId &&
       db
-        .prepare(`SELECT 1 FROM pages WHERE id = ? AND workspace_id = ? AND trashed_at IS NULL AND kind NOT IN ('idea', 'issue')`)
+        .prepare(`SELECT 1 FROM pages WHERE id = ? AND workspace_id = ? AND trashed_at IS NULL AND kind NOT IN ('idea', 'issue', 'tracker')`)
         .get(pageId, ws)
   );
 }
@@ -275,19 +275,6 @@ export function mountWorkspaces(app, { notifyAll }) {
     }
     if (typeof icon === 'string' && icon.trim()) {
       db.prepare('UPDATE workspaces SET icon = ? WHERE id = ?').run(icon.trim().slice(0, 8), req.params.id);
-    }
-    // Prefijo de los elementos de seguimiento (AXA-12): cambia todas las claves
-    if (req.body?.issue_prefix !== undefined) {
-      const p = String(req.body.issue_prefix || '').trim().toUpperCase();
-      if (!/^[A-Z][A-Z0-9]{0,9}$/.test(p)) return res.status(400).json({ error: 'Prefijo: letras y números, empezando por letra (máx. 10)' });
-      db.prepare('UPDATE workspaces SET issue_prefix = ? WHERE id = ?').run(p, req.params.id);
-      try {
-        for (const r of db
-          .prepare(`SELECT p.id, p.title, p.content_text FROM issues i JOIN pages p ON p.id = i.page_id WHERE i.workspace_id = ?`)
-          .all(req.params.id)) {
-          ftsUpsert(r.id, r.title, r.content_text);
-        }
-      } catch {}
     }
     notifyAll();
     res.json(db.prepare('SELECT * FROM workspaces WHERE id = ?').get(req.params.id));

@@ -196,6 +196,13 @@ export default function App() {
   }, []);
 
   const createPage = async (parentId = null, kind = 'doc') => {
+    if (kind === 'tracker') {
+      // lista de seguimiento: plantilla de bloqueos (se cambia en ⚙ Campos)
+      const t = await api.createTracker({ parent_id: parentId, template: 'blockers', title: 'Seguimiento' });
+      await refreshTree();
+      navigate(`/p/${t.id}`);
+      return;
+    }
     const page = await api.createPage({ parent_id: parentId, ...(kind === 'canvas' ? { kind, icon: '🧩', title: 'Canvas' } : {}) });
     await refreshTree();
     navigate(`/p/${page.id}`);
@@ -281,7 +288,7 @@ export default function App() {
           <Route path="/calendar" element={<CalendarView />} />
           <Route path="/graph" element={<GraphPage pages={pages} />} />
           <Route path="/ideas" element={<IdeasView pages={pages} onChanged={refreshTree} />} />
-          <Route path="/issues" element={<IssuesView pages={pages} members={members} onChanged={refreshTree} />} />
+          <Route path="/issues" element={<IssuesView pages={pages} onChanged={refreshTree} />} />
           <Route
             path="*"
             element={

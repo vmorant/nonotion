@@ -291,7 +291,7 @@ export function ftsUpsert(pageId, title, body) {
   // Elementos de seguimiento: su clave (AXA-12) también se busca
   try {
     const k = db
-      .prepare('SELECT i.number, w.issue_prefix AS p FROM issues i JOIN workspaces w ON w.id = i.workspace_id WHERE i.page_id = ?')
+      .prepare('SELECT i.number, t.prefix AS p FROM issues i JOIN trackers t ON t.page_id = i.tracker_id WHERE i.page_id = ?')
       .get(pageId);
     if (k?.p && !String(title || '').startsWith(`${k.p}-${k.number} `)) title = `${k.p}-${k.number} ${title || ''}`;
   } catch {} // antes de crear la tabla de elementos

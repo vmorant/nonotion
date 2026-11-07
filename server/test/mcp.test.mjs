@@ -337,105 +337,122 @@ test('ideas por MCP: crear, desarrollar, materializar, leer y protecciones', asy
   assert.match(r.text, new RegExp(`captura\\.png \\(file_id: ${up.id}, image/png`), 'y aparece como adjunto para read_attachment');
 });
 
-test('seguimiento por MCP: crear, listar, actualizar, relacionar, bloquear y leer', async () => {
+test('seguimiento por MCP: listas con campos propios, tickets, filtros, bloqueos y cronología', async () => {
   const { tools } = await rpc('tools/list', {});
   const names = tools.map((t) => t.name);
-  for (const n of ['list_issues', 'create_issue', 'update_issue', 'link_issue']) assert.ok(names.includes(n), `${n} registrada`);
+  for (const n of ['list_trackers', 'create_tracker', 'update_tracker', 'list_issues', 'create_issue', 'update_issue', 'link_issue']) {
+    assert.ok(names.includes(n), `${n} registrada`);
+  }
+  assert.match((await call('list_trackers', {})).text, /No hay listas todavía. Plantillas para create_tracker: blockers/);
 
+  const proyecto = await api('/api/pages', { title: 'Proyecto AXA' });
   const acta = await api('/api/capture', { title: 'Acta comité AXA', markdown: 'Se acuerda revisar permisos' });
   const doc = await api('/api/capture', { title: 'Arquitectura AXA', markdown: 'Diseño de la plataforma' });
-  let r = await call('create_issue', {
+
+  // dos listas distintas, con sus propios campos y prefijos
+  let r = await call('create_tracker', { title: 'Bloqueantes AXA', template: 'blockers', parent_id: proyecto.id });
+  assert.equal(r.isError, false, r.text);
+  assert.match(r.text, /prefijo BLQ/);
+  const blqId = r.text.match(/id: ([A-Za-z0-9_-]+)/)[1];
+  r = await call('create_tracker', { title: 'To-do', template: 'todo' });
+  assert.match(r.text, /prefijo TODO/);
+  r = await call('create_tracker', { title: 'Otros bloqueos', template: 'blockers' });
+  assert.match(r.text, /prefijo BLQ2/, 'prefijo único por espacio');
+  r = await call('list_trackers', {});
+  assert.match(r.text, /Bloqueantes AXA — prefijo BLQ/);
+  assert.match(r.text, /Impacto \[select: Alto, Medio, Bajo\]/);
+  assert.match(r.text, /Prioridad \[select: Alta, Media, Baja\]/);
+
+  // la lista está en el árbol, bajo su padre
+  const tree = await call('list_pages', {});
+  assert.match(tree.text, /Bloqueantes AXA \(id: [^,]+, lista de seguimiento\)/);
+
+  // ticket con campos por nombre y opción
+  r = await call('create_issue', {
+    tracker: 'BLQ',
     title: 'Falta acceso a Unity Catalog',
-    type: 'blocker',
-    priority: 'high',
-    assignee: 'Equipo AXA',
-    due_date: '2026-11-20',
-    description: 'Sin permisos **no** se puede seguir con la ingesta',
+    fields: { Impacto: 'alto', Responsable: 'Equipo AXA', 'Fecha límite': '2026-11-20', Área: 'Datos' },
+    description: 'Sin permisos **no** se puede seguir',
     links: [
       { type: 'origin', target: acta.id },
       { type: 'documents', target: doc.id },
     ],
-    tags: ['Permisos'],
   });
   assert.equal(r.isError, false, r.text);
-  const m = r.text.match(/Elemento creado: ([A-Z0-9]+-(\d+)) .*\(id: ([A-Za-z0-9_-]+)/);
-  assert.ok(m, r.text);
-  const [, key1, , id1] = m;
-  const prefix = key1.split('-')[0];
+  assert.match(r.text, /Ticket creado: BLQ-1 .* en «Bloqueantes AXA» .*Abierto/);
+  const id1 = r.text.match(/\(id: ([A-Za-z0-9_-]+)/)[1];
+  assert.equal((await api(`/api/pages/${id1}`)).parent_id, blqId, 'el ticket cuelga de su lista');
+  r = await call('create_issue', { tracker: 'To-do', title: 'Revisar contrato', fields: { Prioridad: 'Alta' } });
+  assert.match(r.text, /TODO-1/);
+  r = await call('create_issue', { tracker: 'BLQ', title: 'Migrar tablas', fields: { Impacto: 'Medio' } });
+  assert.match(r.text, /BLQ-2/);
 
-  r = await call('create_issue', { title: 'Migrar tablas de siniestros', type: 'task' });
-  const key2 = r.text.match(/Elemento creado: ([A-Z0-9]+-\d+)/)[1];
-  assert.equal(Number(key2.split('-')[1]), Number(key1.split('-')[1]) + 1, 'números consecutivos por espacio');
+  // errores claros: campo u opción inexistentes, lista inexistente
+  assert.match((await call('create_issue', { tracker: 'BLQ', title: 'x', fields: { Cliente: 'AXA' } })).text, /no tiene ningún campo «Cliente»/);
+  assert.match((await call('create_issue', { tracker: 'BLQ', title: 'x', fields: { Impacto: 'Enorme' } })).text, /"Enorme" no es una opción de «Impacto» \(Alto, Medio, Bajo\)/);
+  assert.match((await call('create_issue', { tracker: 'NOPE', title: 'x' })).text, /No hay ninguna lista "NOPE"/);
 
-  // bloquea: por clave; un ciclo se rechaza
-  r = await call('link_issue', { issue: key1, type: 'blocks', target: key2 });
+  // update_tracker: campo nuevo y opciones
+  r = await call('update_tracker', { tracker: 'BLQ', add_fields: [{ name: 'Cliente', type: 'select', options: ['AXA', 'Interno'] }], add_options: [{ field: 'Área', options: ['Legal'] }] });
   assert.equal(r.isError, false, r.text);
-  r = await call('link_issue', { issue: key2, type: 'blocks', target: key1 });
-  assert.match(r.text, /ciclo/);
-  r = await call('link_issue', { issue: key1, type: 'blocks', target: doc.id });
-  assert.match(r.text, /solo se usa entre elementos/);
+  assert.match(r.text, /Cliente/);
+  assert.equal((await call('update_issue', { issue: 'BLQ-1', fields: { Cliente: 'AXA', Área: 'Legal' } })).isError, false);
 
-  // list_issues: filtros y bloqueos
+  // bloqueos entre tickets (también de otra lista), ciclos rechazados
+  assert.equal((await call('link_issue', { issue: 'BLQ-1', type: 'blocks', target: 'BLQ-2' })).isError, false);
+  assert.equal((await call('link_issue', { issue: 'BLQ-1', type: 'blocks', target: 'TODO-1' })).isError, false);
+  assert.match((await call('link_issue', { issue: 'BLQ-2', type: 'blocks', target: 'BLQ-1' })).text, /ciclo/);
+  assert.match((await call('link_issue', { issue: 'BLQ-1', type: 'blocks', target: doc.id })).text, /solo se usa entre tickets/);
+
+  // listados y filtros
   r = await call('list_issues', { blocked_only: true });
-  assert.match(r.text, new RegExp(`${key2} Migrar tablas de siniestros .*⛔ bloqueado por 1`));
-  r = await call('list_issues', { type: 'blocker', status: 'active' });
-  assert.match(r.text, new RegExp(`${key1} Falta acceso`));
-  assert.doesNotMatch(r.text, new RegExp(key2));
+  assert.match(r.text, /## Bloqueantes AXA\n- BLQ-2 Migrar tablas · Abierto · Impacto: Medio · ⛔ bloqueado por 1/);
+  assert.match(r.text, /## To-do\n- TODO-1 Revisar contrato · Pendiente · Prioridad: Alta · ⛔ bloqueado por 1/);
+  r = await call('list_issues', { tracker: 'BLQ', fields: { Impacto: 'Alto' } });
+  assert.match(r.text, /BLQ-1 Falta acceso/);
+  assert.doesNotMatch(r.text, /BLQ-2/);
+  r = await call('list_issues', { fields: { Responsable: 'equipo axa' } });
+  assert.match(r.text, /BLQ-1/);
 
-  // read_page de un elemento: campos, descripción, relaciones, cronología
+  // read_page de un ticket y de una lista
   r = await call('read_page', { page_id: id1 });
-  assert.match(r.text, /ELEMENTO DE SEGUIMIENTO/);
-  assert.match(r.text, new RegExp(`\\*\\*${key1}\\*\\* · Bloqueo · estado: \\*\\*Abierto\\*\\* · prioridad: Alta · responsable: Equipo AXA · fecha límite: 2026-11-20`));
-  assert.match(r.text, /Sin permisos \*\*no\*\* se puede seguir/);
+  assert.match(r.text, /TICKET DE SEGUIMIENTO/);
+  assert.match(r.text, /\*\*BLQ-1\*\* · lista «Bloqueantes AXA» · estado: \*\*Abierto\*\* \(Pendiente\) · Impacto: Alto · Área: Legal · Responsable: Equipo AXA · Fecha límite: 2026-11-20 · Cliente: AXA/);
   assert.match(r.text, /Viene de: «Acta comité AXA»/);
-  assert.match(r.text, /Documentado en: «Arquitectura AXA»/);
-  assert.match(r.text, new RegExp(`Bloquea a: ${key2} «Migrar tablas de siniestros» \\[Abierto\\]`));
-  assert.match(r.text, /Claude: creó el elemento/);
+  assert.match(r.text, /Bloquea a: BLQ-2 «Migrar tablas» \[Abierto\]/);
+  assert.match(r.text, /Área: Datos → Legal/);
+  r = await call('read_page', { page_id: blqId });
+  assert.match(r.text, /LISTA DE SEGUIMIENTO/);
+  assert.match(r.text, /\| Clave \| Título \| Estado \| Impacto \| Área \| Responsable \| Fecha límite \| Cliente \|/);
+  assert.match(r.text, /\| BLQ-1 \| Falta acceso a Unity Catalog \| Abierto \| Alto \| Legal \| Equipo AXA \| 2026-11-20 \| AXA \|/);
+  assert.match((await call('append_to_page', { page_id: blqId, markdown: 'x' })).text, /lista de seguimiento/);
 
-  // update_issue: cambios y comentario en la cronología
-  r = await call('update_issue', { issue: key1, status: 'in_progress', assignee: 'vmorant', comment: 'IT confirma que lo tramita' });
+  // estados por nombre y cronología
+  r = await call('update_issue', { issue: 'BLQ-1', status: 'en curso', comment: 'IT confirma que lo tramita' });
   assert.equal(r.isError, false, r.text);
+  assert.match((await call('update_issue', { issue: 'BLQ-1', status: 'hecho' })).text, /"hecho" no es un estado de la lista \(Abierto, En curso, Bloqueado, Resuelto\)/);
   r = await call('read_page', { page_id: id1 });
-  assert.match(r.text, /estado: Abierto → En curso/);
-  assert.match(r.text, /responsable: Equipo AXA → vmorant/);
+  assert.match(r.text, /Estado: Abierto → En curso/);
   assert.match(r.text, /comentó:\n {4}IT confirma que lo tramita/);
-  assert.match((await call('update_issue', { issue: key1, status: 'hecho' })).text, /Invalid|no válido|invalid/i);
-  assert.match((await call('update_issue', { issue: `${prefix}-999` })).text, /No hay ningún elemento/);
+  await call('update_issue', { issue: 'BLQ-1', status: 'Resuelto' });
+  assert.doesNotMatch((await call('list_issues', { blocked_only: true })).text, /BLQ-2/, 'resolver el bloqueante desbloquea');
 
-  // la descripción admite Markdown normal (no es como canvas o ideas)
-  assert.equal((await call('append_to_page', { page_id: id1, markdown: 'Actualización: pedido el rol' })).isError, false);
-
-  // menciones por clave en una página cualquiera
-  const nota = await api('/api/capture', { title: 'Nota de seguimiento', markdown: `Pendiente de ${key2} y de ${key1}0 (no existe)` });
-  const forPage = await api(`/api/pages/${nota.id}/issues`);
-  assert.deepEqual(forPage.mentioned.map((x) => x.key), [key2]);
-  const forDoc = await api(`/api/pages/${doc.id}/issues`);
-  assert.deepEqual(forDoc.linked.map((l) => [l.type, l.issue.key]), [['documents', key1]]);
-
-  // resolver el bloqueante desbloquea al otro
-  await call('update_issue', { issue: key1, status: 'resolved' });
-  r = await call('list_issues', { blocked_only: true });
-  assert.doesNotMatch(r.text, new RegExp(key2));
-
-  // búsqueda por clave, grafo y fuera del árbol
-  assert.ok((await api(`/api/search?q=${key2}`)).some((p) => p.title === 'Migrar tablas de siniestros'));
+  // menciones, búsqueda, grafo y árbol
+  const nota = await api('/api/capture', { title: 'Nota', markdown: 'Pendiente de BLQ-2 y TODO-1 y BLQ-20' });
+  assert.deepEqual((await api(`/api/pages/${nota.id}/issues`)).mentioned.map((x) => x.key).sort(), ['BLQ-2', 'TODO-1']);
+  assert.ok((await api('/api/search?q=BLQ-2')).some((p) => p.title === 'Migrar tablas'));
   const g = await api('/api/graph');
   assert.ok(g.links.some((l) => l.source === id1 && l.rel === 'blocks'));
-  assert.ok(g.pages.some((p) => p.id === id1 && p.key === key1 && p.status === 'resolved'));
-  assert.match((await call('list_pages', {})).text, /Elementos de seguimiento \(fuera del árbol\): 2/);
-  assert.match((await call('move_page', { page_id: id1, new_parent_id: null })).text, /elemento de seguimiento/);
-  assert.match((await call('move_page', { page_id: nota.id, new_parent_id: id1 })).text, /no puede contener/);
-  assert.equal((await api('/api/pages', { title: 'Bajo elemento', parent_id: id1 })).error !== undefined, true);
+  assert.ok(g.pages.some((p) => p.id === id1 && p.key === 'BLQ-1' && p.status === 'done'));
+  assert.match((await call('move_page', { page_id: id1, new_parent_id: null })).text, /ticket/);
+  assert.match((await call('move_page', { page_id: nota.id, new_parent_id: blqId })).text, /no puede contener/);
+  assert.equal((await call('move_page', { page_id: blqId, new_parent_id: null })).isError, false, 'la lista se mueve como cualquier página');
 
-  // idea → elemento: queda como resultado de la idea y enlazado como origen
+  // idea → ticket
   const idea = (await call('create_idea', { seed_text: 'Automatizar altas de usuarios' })).text.match(/id: ([A-Za-z0-9_-]+)/)[1];
-  r = await call('create_issue', { title: 'Automatizar altas', from_idea_id: idea });
-  assert.equal(r.isError, false, r.text);
-  const key3 = r.text.match(/Elemento creado: ([A-Z0-9]+-\d+)/)[1];
+  r = await call('create_issue', { tracker: 'TODO', title: 'Automatizar altas', from_idea_id: idea });
+  assert.match(r.text, /TODO-2/);
   const ideaDoc = JSON.parse((await api(`/api/pages/${idea}`)).content);
   assert.equal(ideaDoc.outcomes.at(-1).type, 'issue');
-  assert.equal(ideaDoc.outcomes.at(-1).label, key3);
-  assert.equal(ideaDoc.status, 'documented');
-  r = await call('read_page', { page_id: idea });
-  assert.match(r.text, new RegExp(`Elemento «${key3}»`));
+  assert.equal(ideaDoc.outcomes.at(-1).label, 'TODO-2');
 });

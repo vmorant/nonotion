@@ -12,18 +12,7 @@ import db, { DATA_DIR } from './db.js';
 import { lookupToken } from './workspaces.js';
 import { normalizeTag } from './tags.js';
 import { markdownToDoc } from './markdown.js';
-import {
-  issueHeaderMarkdown,
-  issueRelationsMarkdown,
-  issueTimelineMarkdown,
-  STATUSES as ISSUE_STATUSES,
-  TYPES as ISSUE_TYPES,
-  PRIORITIES as ISSUE_PRIORITIES,
-  LINK_TYPES as ISSUE_LINK_TYPES,
-  STATUS_LABELS as ISSUE_STATUS_LABELS,
-  TYPE_LABELS as ISSUE_TYPE_LABELS,
-  PRIORITY_LABELS as ISSUE_PRIORITY_LABELS,
-} from './issues.js';
+import { issueHeaderMarkdown, issueRelationsMarkdown, issueTimelineMarkdown } from './issues.js';
 
 const TEXT_LIMIT = 200 * 1024; // 200 KB para adjuntos de texto
 const IMAGE_LIMIT = 4 * 1024 * 1024; // 4 MB para imágenes
@@ -171,11 +160,12 @@ export function mountMcp(app, port) {
           const all = await (await api('/api/pages')).json();
           const ideas = all.filter((p) => p.kind === 'idea');
           const issues = all.filter((p) => p.kind === 'issue');
+          const trackersN = all.filter((p) => p.kind === 'tracker').length;
           const pages = all.filter((p) => p.kind !== 'idea' && p.kind !== 'issue');
           const ws = (await (await api('/api/workspaces')).json()).workspaces?.[0];
           let head = ws ? `Espacio: ${ws.icon || ''} ${ws.name} (este conector solo ve este espacio)\n` : '';
           head += ideas.length ? `Ideas en desarrollo (fuera del árbol): ${ideas.length} → list_ideas\n` : '';
-          head += issues.length ? `Elementos de seguimiento (fuera del árbol): ${issues.length} → list_issues\n` : '';
+          head += trackersN ? `Listas de seguimiento: ${trackersN} (marcadas en el árbol) con ${issues.length} ticket(s) → list_trackers / list_issues\n` : '';
           head += '\n';
           if (!pages.length) return ok(head + 'No hay páginas todavía.');
           const children = new Map();
@@ -188,7 +178,7 @@ export function mountMcp(app, port) {
           const walk = (parentId, depth) => {
             for (const p of children.get(parentId) || []) {
               lines.push(
-                `${'  '.repeat(depth)}- ${p.icon || '📄'} ${p.title || 'Sin título'} (id: ${p.id}${p.kind === 'canvas' ? ', canvas' : ''}${p.page_date ? `, fecha: ${p.page_date}` : ''})${p.tags?.length ? ` [${p.tags.map((t) => '#' + t).join(' ')}]` : ''}`
+                `${'  '.repeat(depth)}- ${p.icon || '📄'} ${p.title || 'Sin título'} (id: ${p.id}${p.kind === 'canvas' ? ', canvas' : p.kind === 'tracker' ? ', lista de seguimiento' : ''}${p.page_date ? `, fecha: ${p.page_date}` : ''})${p.tags?.length ? ` [${p.tags.map((t) => '#' + t).join(' ')}]` : ''}`
               );
               walk(p.id, depth + 1);
             }
@@ -217,11 +207,12 @@ export function mountMcp(app, port) {
           out += p.tags?.length ? `Etiquetas: ${p.tags.map((t) => '#' + t).join(' ')}\n\n` : '\n';
           if (p.kind === 'canvas') out += '(Esta página es un CANVAS: edítala con update_canvas, no con append/edit/update_page)\n\n';
           if (p.kind === 'idea') out += '(Esta página es una IDEA: trabájala con develop_idea y materialize_idea, no con append/edit/update_page)\n\n';
+          if (p.kind === 'tracker') out += '(Esta página es una LISTA DE SEGUIMIENTO: crea tickets con create_issue, configúrala con update_tracker)\n\n';
           let issue = null;
           if (p.kind === 'issue') {
             issue = await (await api(`/api/pages/${page_id}/issue`)).json();
             out +=
-              `(Esta página es un ELEMENTO DE SEGUIMIENTO: cambia estado y campos o comenta con update_issue, relaciónalo con link_issue; la descripción es Markdown normal y admite append/edit/update_page)\n\n` +
+              `(Esta página es un TICKET DE SEGUIMIENTO: cambia estado y campos o comenta con update_issue, relaciónalo con link_issue; la descripción es Markdown normal y admite append/edit/update_page)\n\n` +
               issueHeaderMarkdown(issue) +
               '\n\n## Descripción\n\n';
           }
@@ -755,54 +746,183 @@ export function mountMcp(app, port) {
       }
     );
 
-    // ---------- Seguimiento (issues): bloqueos, problemas, riesgos, tareas… ----------
-    const issueRef = z.string().describe('Clave del elemento (p. ej. "AXA-12") o su id de página');
+    // ---------- Seguimiento: listas (trackers) y tickets, como un Jira ligero ----------
+    const issueRef = z.string().describe('Clave del ticket (p. ej. "BLQ-12") o su id de página');
+    const trackerRef = z.string().describe('Lista: su id, su prefijo (BLQ) o su título');
     const resolveIssue = async (ref) => {
       const s = String(ref || '').trim();
       if (/^[A-Za-z][A-Za-z0-9]{0,9}-\d+$/.test(s)) {
         const r = await (await api(`/api/issues?key=${encodeURIComponent(s)}`)).json();
-        if (!r.issues.length) throw new Error(`No hay ningún elemento ${s} en este espacio`);
+        if (!r.issues.length) throw new Error(`No hay ningún ticket ${s} en este espacio`);
         return r.issues[0].id;
       }
       return s;
     };
+    const resolveTracker = async (ref) => {
+      const s = String(ref || '').trim();
+      const { trackers } = await (await api('/api/trackers')).json();
+      const fold = (x) => String(x || '').normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase().trim();
+      const t = trackers.find((x) => x.id === s || x.prefix === s.toUpperCase()) || trackers.find((x) => fold(x.title) === fold(s));
+      if (!t) throw new Error(`No hay ninguna lista "${s}". Listas: ${trackers.map((x) => `${x.title} (${x.prefix})`).join(', ') || 'ninguna (créala con create_tracker)'}`);
+      return t;
+    };
     const linkSchema = z.object({
       type: z
-        .enum(ISSUE_LINK_TYPES)
-        .describe('blocks = este elemento bloquea a otro elemento; relates = relacionado; documents = documentado en una página; origin = viene de (idea, acta de reunión, página)'),
-      target: z.string().describe('Id de la página o clave del elemento destino (AXA-7)'),
+        .enum(['blocks', 'relates', 'documents', 'origin'])
+        .describe('blocks = este ticket bloquea a otro ticket; relates = relacionado; documents = documentado en una página; origin = viene de (idea, acta de reunión, página)'),
+      target: z.string().describe('Id de la página o clave del ticket destino (BLQ-7)'),
     });
-    const issueLine = (i) =>
-      `- ${i.key} ${i.title} · ${ISSUE_TYPE_LABELS[i.type]} · ${ISSUE_STATUS_LABELS[i.status]} · ${ISSUE_PRIORITY_LABELS[i.priority]}` +
-      `${i.assignee ? ` · ${i.assignee}` : ''}${i.due_date ? ` · vence ${i.due_date}` : ''}${i.blocked_by_open ? ` · ⛔ bloqueado por ${i.blocked_by_open}` : ''} (id: ${i.id})`;
+    const fieldsSchema = z
+      .record(z.string(), z.any())
+      .optional()
+      .describe('Valores por NOMBRE de campo de la lista: {"Responsable": "vmorant", "Impacto": "Alto", "Fecha límite": "2026-11-20"}. Desplegables por nombre de opción; varias opciones como lista; null para vaciar. Mira los campos con list_trackers');
+    const CAT = { todo: 'pendiente', doing: 'en curso', blocked: 'bloqueado', done: 'hecho' };
+    const issueLine = (i, fieldsOf) => {
+      const extra = (fieldsOf(i.tracker_id) || [])
+        .filter((f) => i.values[f.id] != null && !(Array.isArray(i.values[f.id]) && !i.values[f.id].length))
+        .map((f) => `${f.name}: ${f.type === 'select' ? f.options.find((o) => o.id === i.values[f.id])?.name : f.type === 'multi' ? i.values[f.id].map((x) => f.options.find((o) => o.id === x)?.name).join('/') : f.type === 'checkbox' ? (i.values[f.id] ? 'sí' : 'no') : i.values[f.id]}`);
+      return `- ${i.key} ${i.title} · ${i.status_name}${extra.length ? ` · ${extra.join(' · ')}` : ''}${i.blocked_by_open ? ` · ⛔ bloqueado por ${i.blocked_by_open}` : ''} (id: ${i.id})`;
+    };
+
+    server.registerTool(
+      'list_trackers',
+      {
+        title: 'Listar listas de seguimiento',
+        description:
+          'Devuelve las listas de seguimiento del espacio (p. ej. "Bloqueantes", "To-do", "Temas"): prefijo de sus tickets, estados y campos con sus opciones, y cuántos tickets hay por estado. Úsala antes de crear o filtrar tickets para saber qué lista y qué campos usar.',
+        inputSchema: {},
+      },
+      async () => {
+        try {
+          const { trackers, templates } = await (await api('/api/trackers')).json();
+          if (!trackers.length) {
+            return ok(`No hay listas todavía. Plantillas para create_tracker: ${templates.map((t) => `${t.id} (${t.label})`).join(', ')}.`);
+          }
+          return ok(
+            trackers
+              .map((t) =>
+                [
+                  `## ${t.icon || '📋'} ${t.title} — prefijo ${t.prefix} (id: ${t.id})`,
+                  `Tickets: ${Object.entries(t.counts).filter(([, n]) => n).map(([c, n]) => `${n} ${CAT[c]}`).join(', ') || 'ninguno'}`,
+                  `Estados: ${t.config.statuses.map((s) => `${s.name} (${CAT[s.category]})`).join(', ')}`,
+                  `Campos: ${t.config.fields.map((f) => `${f.name} [${f.type}${f.options ? `: ${f.options.map((o) => o.name).join(', ') || '—'}` : ''}]`).join('; ') || 'solo título y estado'}`,
+                ].join('\n')
+              )
+              .join('\n\n')
+          );
+        } catch (e) {
+          return fail(e);
+        }
+      }
+    );
+
+    server.registerTool(
+      'create_tracker',
+      {
+        title: 'Crear lista de seguimiento',
+        description:
+          'Crea una lista de seguimiento (página del árbol con tickets, como un tablero de Jira ligero) a partir de una plantilla: blockers (bloqueos e impedimentos), todo (tareas), topics (temas y decisiones) o blank. Úsala solo cuando el usuario lo pida; elige el padre temático (p. ej. la página del proyecto).',
+        inputSchema: {
+          title: z.string().describe('Nombre de la lista, p. ej. "Bloqueantes AXA"'),
+          template: z.enum(['blockers', 'todo', 'topics', 'blank']).optional().describe('Por defecto blank'),
+          parent_id: z.string().optional().describe('Página bajo la que va (sin él, en la raíz)'),
+          prefix: z.string().optional().describe('Prefijo de las claves (letras y números, p. ej. BLQ); por defecto el de la plantilla o derivado del título'),
+          icon: z.string().optional(),
+        },
+      },
+      async (args) => {
+        try {
+          const d = await (await api('/api/trackers', { method: 'POST', body: JSON.stringify(args) })).json();
+          return ok(
+            `Lista creada: «${args.title}» (id: ${d.id}, prefijo ${d.prefix}). Estados: ${d.config.statuses.map((s) => s.name).join(', ')}. Campos: ${d.config.fields.map((f) => f.name).join(', ') || 'ninguno'}.`
+          );
+        } catch (e) {
+          return fail(e);
+        }
+      }
+    );
+
+    server.registerTool(
+      'update_tracker',
+      {
+        title: 'Configurar lista de seguimiento',
+        description:
+          'Cambia la configuración de una lista: añadir campos (desplegable, varias opciones, texto, número, fecha, persona, casilla, enlace), añadir opciones a un desplegable, añadir estados, renombrar la lista o cambiar su prefijo. Solo cuando el usuario lo pida. No borra nada (para quitar campos o estados, que lo haga el usuario desde la interfaz).',
+        inputSchema: {
+          tracker: trackerRef,
+          add_fields: z
+            .array(
+              z.object({
+                name: z.string(),
+                type: z.enum(['select', 'multi', 'text', 'number', 'date', 'person', 'checkbox', 'url']),
+                options: z.array(z.string()).optional().describe('Opciones de un desplegable'),
+              })
+            )
+            .optional(),
+          add_options: z.array(z.object({ field: z.string(), options: z.array(z.string()) })).optional().describe('Nuevas opciones para desplegables existentes'),
+          add_statuses: z.array(z.object({ name: z.string(), category: z.enum(['todo', 'doing', 'blocked', 'done']) })).optional(),
+          prefix: z.string().optional(),
+          title: z.string().optional(),
+        },
+      },
+      async ({ tracker, add_fields = [], add_options = [], add_statuses = [], prefix, title }) => {
+        try {
+          const t = await resolveTracker(tracker);
+          const config = JSON.parse(JSON.stringify(t.config));
+          const COLORS = ['blue', 'green', 'yellow', 'orange', 'red', 'purple', 'pink', 'teal', 'gray'];
+          const optsOf = (names, start = 0) => names.map((n, i) => ({ name: n, color: COLORS[(start + i) % COLORS.length] }));
+          for (const f of add_fields) config.fields.push({ name: f.name, type: f.type, ...(f.type === 'select' || f.type === 'multi' ? { options: optsOf(f.options || []) } : {}) });
+          for (const a of add_options) {
+            const f = config.fields.find((x) => x.name.toLowerCase() === a.field.toLowerCase() || x.id === a.field);
+            if (!f || !f.options) return fail(new Error(`«${a.field}» no es un desplegable de la lista`));
+            const have = new Set(f.options.map((o) => o.name.toLowerCase()));
+            f.options.push(...optsOf(a.options.filter((o) => !have.has(o.toLowerCase())), f.options.length));
+          }
+          for (const s of add_statuses) config.statuses.push({ name: s.name, category: s.category, color: s.category === 'done' ? 'green' : s.category === 'blocked' ? 'red' : s.category === 'doing' ? 'yellow' : 'blue' });
+          const body = { config };
+          if (prefix) body.prefix = prefix;
+          const d = await (await api(`/api/pages/${t.id}/tracker`, { method: 'PATCH', body: JSON.stringify(body) })).json();
+          if (title) await api(`/api/pages/${t.id}`, { method: 'PUT', body: JSON.stringify({ title }) });
+          return ok(`Lista ${d.prefix} actualizada. Campos: ${d.config.fields.map((f) => f.name).join(', ') || 'ninguno'}. Estados: ${d.config.statuses.map((s) => s.name).join(', ')}.`);
+        } catch (e) {
+          return fail(e);
+        }
+      }
+    );
 
     server.registerTool(
       'list_issues',
       {
-        title: 'Listar elementos de seguimiento',
+        title: 'Listar tickets',
         description:
-          'Lista los elementos de seguimiento del espacio (bloqueos, problemas, riesgos, tareas, decisiones, preguntas) con clave (AXA-12), estado, prioridad, responsable y fecha. Úsala para "¿qué está bloqueado?", "¿qué tengo abierto?", o antes de crear uno para no duplicarlo.',
+          'Lista tickets de seguimiento de una lista o de todas, con clave, estado y campos. Úsala para "¿qué está bloqueado?", "¿qué tengo pendiente?", "temas abiertos de AXA", o antes de crear uno para no duplicarlo.',
         inputSchema: {
-          status: z.string().optional().describe('Estados separados por comas (open, in_progress, blocked, resolved, closed) o "active" = abiertos/en curso/bloqueados'),
-          type: z.string().optional().describe('Tipos separados por comas: blocker, problem, risk, task, decision, question'),
-          priority: z.string().optional().describe('low, medium, high, critical (separados por comas)'),
-          assignee: z.string().optional().describe('Texto del responsable, o "none" para los que no tienen'),
-          blocked_only: z.boolean().optional().describe('Solo lo bloqueado o bloqueante abierto'),
-          query: z.string().optional().describe('Texto en clave, título o responsable'),
+          tracker: trackerRef.optional(),
+          category: z.string().optional().describe('todo, doing, blocked, done o "active" (pendiente + en curso + bloqueado), separadas por comas'),
+          status: z.string().optional().describe('Nombres de estado de la lista, separados por comas'),
+          blocked_only: z.boolean().optional().describe('Solo lo bloqueado (estado bloqueado o bloqueado por otro ticket abierto)'),
+          fields: z.record(z.string(), z.string()).optional().describe('Filtros por campo: {"Responsable": "vmorant", "Impacto": "Alto"}'),
+          query: z.string().optional().describe('Texto en clave o título'),
         },
       },
-      async ({ status, type, priority, assignee, blocked_only, query }) => {
+      async ({ tracker, category, status, blocked_only, fields, query }) => {
         try {
           const qs = new URLSearchParams();
+          if (tracker) qs.set('tracker', (await resolveTracker(tracker)).id);
+          if (category) qs.set('category', category);
           if (status) qs.set('status', status);
-          if (type) qs.set('type', type);
-          if (priority) qs.set('priority', priority);
-          if (assignee) qs.set('assignee', assignee);
           if (blocked_only) qs.set('blocked', 'true');
+          if (fields) qs.set('fields', JSON.stringify(fields));
           if (query) qs.set('q', query);
-          const r = await (await api(`/api/issues?${qs}`)).json();
-          if (!r.issues.length) return ok('No hay elementos que coincidan.');
-          return ok(`${r.issues.length} elemento(s) (prefijo ${r.prefix}):\n` + r.issues.map(issueLine).join('\n'));
+          const [r, { trackers }] = await Promise.all([(await api(`/api/issues?${qs}`)).json(), (await api('/api/trackers')).json()]);
+          if (!r.issues.length) return ok('No hay tickets que coincidan.');
+          const fieldsOf = (id) => trackers.find((t) => t.id === id)?.config.fields;
+          const byTracker = new Map();
+          for (const i of r.issues) {
+            if (!byTracker.has(i.tracker_title)) byTracker.set(i.tracker_title, []);
+            byTracker.get(i.tracker_title).push(issueLine(i, fieldsOf));
+          }
+          return ok([...byTracker].map(([t, lines]) => `## ${t}\n${lines.join('\n')}`).join('\n\n'));
         } catch (e) {
           return fail(e);
         }
@@ -812,27 +932,25 @@ export function mountMcp(app, port) {
     server.registerTool(
       'create_issue',
       {
-        title: 'Crear elemento de seguimiento',
+        title: 'Crear ticket',
         description:
-          'Crea un elemento de seguimiento (bloqueo, problema, riesgo, tarea, decisión o pregunta) fuera del árbol de páginas, con su clave (AXA-12). Úsala solo cuando el usuario lo pida (p. ej. "apúntalo como bloqueo", "crea los elementos de esta reunión"); antes mira list_issues para no duplicar. Relaciónalo con las páginas de las que sale o que lo documentan.',
+          'Crea un ticket en una lista de seguimiento (mira antes list_trackers para elegir la lista y sus campos, y list_issues para no duplicar). Solo cuando el usuario lo pida ("apúntalo como bloqueante", "crea los tickets de esta reunión"). Relaciónalo con las páginas de las que sale o que lo documentan.',
         inputSchema: {
+          tracker: trackerRef,
           title: z.string().describe('Título corto y concreto'),
-          type: z.enum(ISSUE_TYPES).optional().describe('blocker, problem, risk, task (por defecto), decision, question'),
-          priority: z.enum(ISSUE_PRIORITIES).optional().describe('low, medium (por defecto), high, critical'),
-          status: z.enum(ISSUE_STATUSES).optional().describe('Por defecto open'),
-          assignee: z.string().optional().describe('Responsable (usuario de GitHub o nombre libre, p. ej. "Equipo AXA")'),
-          due_date: z.string().optional().describe('Fecha límite AAAA-MM-DD'),
-          milestone: z.string().optional().describe('Hito o fase'),
+          status: z.string().optional().describe('Nombre del estado (por defecto el primero de la lista)'),
+          fields: fieldsSchema,
           description: z.string().optional().describe('Descripción en Markdown: contexto, impacto, qué se necesita'),
           links: z.array(linkSchema).optional().describe('Relaciones a crear'),
-          from_idea_id: z.string().optional().describe('Idea de la que sale: queda enlazada como origen y la idea lo registra como resultado'),
+          from_idea_id: z.string().optional().describe('Idea de la que sale: queda enlazada y la idea lo registra como resultado'),
           tags: z.array(z.string()).optional(),
         },
       },
-      async (args) => {
+      async ({ tracker, ...args }) => {
         try {
-          const d = await (await api('/api/issues', { method: 'POST', body: JSON.stringify(args) })).json();
-          return ok(`Elemento creado: ${d.key} «${args.title}» (id: ${d.page_id}, ${ISSUE_TYPE_LABELS[d.type]}, ${ISSUE_STATUS_LABELS[d.status]}) con ${d.links.length} relación(es).`);
+          const t = await resolveTracker(tracker);
+          const d = await (await api('/api/issues', { method: 'POST', body: JSON.stringify({ ...args, tracker_id: t.id }) })).json();
+          return ok(`Ticket creado: ${d.key} «${args.title}» en «${d.tracker.title}» (id: ${d.page_id}, ${d.status_name}) con ${d.links.length} relación(es).`);
         } catch (e) {
           return fail(e);
         }
@@ -842,17 +960,13 @@ export function mountMcp(app, port) {
     server.registerTool(
       'update_issue',
       {
-        title: 'Actualizar elemento de seguimiento',
+        title: 'Actualizar ticket',
         description:
-          'Cambia estado, tipo, prioridad, responsable, fecha, hito o título de un elemento y/o añade un comentario a su cronología. Cada cambio queda registrado con quién y cuándo. Úsala cuando el usuario lo pida o confirme (p. ej. "marca AXA-12 como resuelto", "comenta que IT ya dio acceso").',
+          'Cambia estado, campos o título de un ticket y/o añade un comentario a su cronología (queda con autor y fecha). Cuando el usuario lo pida o lo confirme (p. ej. "marca BLQ-12 como resuelto", "comenta que IT ya dio acceso").',
         inputSchema: {
           issue: issueRef,
-          status: z.enum(ISSUE_STATUSES).optional(),
-          type: z.enum(ISSUE_TYPES).optional(),
-          priority: z.enum(ISSUE_PRIORITIES).optional(),
-          assignee: z.string().nullable().optional().describe('null o "" para quitarlo'),
-          due_date: z.string().nullable().optional().describe('AAAA-MM-DD, o null para quitarla'),
-          milestone: z.string().nullable().optional(),
+          status: z.string().optional().describe('Nombre del nuevo estado'),
+          fields: fieldsSchema,
           title: z.string().optional(),
           comment: z.string().optional().describe('Comentario en Markdown para la cronología'),
         },
@@ -860,11 +974,8 @@ export function mountMcp(app, port) {
       async ({ issue, ...rest }) => {
         try {
           const id = await resolveIssue(issue);
-          const body = { ...rest };
-          if (body.assignee === '') body.assignee = null;
-          if (body.due_date === '') body.due_date = null;
-          const d = await (await api(`/api/pages/${id}/issue`, { method: 'PATCH', body: JSON.stringify(body) })).json();
-          return ok(`${d.key} actualizado: ${ISSUE_STATUS_LABELS[d.status]} · ${ISSUE_PRIORITY_LABELS[d.priority]}${d.assignee ? ` · ${d.assignee}` : ''}${d.due_date ? ` · vence ${d.due_date}` : ''}.`);
+          const d = await (await api(`/api/pages/${id}/issue`, { method: 'PATCH', body: JSON.stringify(rest) })).json();
+          return ok(`${d.key} actualizado: ${d.status_name}.`);
         } catch (e) {
           return fail(e);
         }
@@ -874,9 +985,9 @@ export function mountMcp(app, port) {
     server.registerTool(
       'link_issue',
       {
-        title: 'Relacionar elemento de seguimiento',
+        title: 'Relacionar ticket',
         description:
-          'Añade o quita una relación de un elemento: bloquea a otro elemento, relacionado con, documentado en una página, o viene de (idea, acta, página). Para quitar, pasa remove=true con el mismo tipo y destino.',
+          'Añade o quita una relación de un ticket: bloquea a otro ticket, relacionado con, documentado en una página, o viene de (idea, acta, página). Para quitar, pasa remove=true con el mismo tipo y destino.',
         inputSchema: {
           issue: issueRef,
           type: linkSchema.shape.type,

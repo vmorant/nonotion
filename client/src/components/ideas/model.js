@@ -21,7 +21,7 @@ export const STEP_LABELS = {
   outline: 'Esquema',
 };
 export const OUTCOME_TYPES = ['page', 'canvas', 'plan', 'issue', 'file', 'external'];
-export const OUTCOME_LABELS = { page: 'Página', canvas: 'Diagrama / canvas', plan: 'Planning', issue: 'Elemento de seguimiento', file: 'Archivo', external: 'Documento externo' };
+export const OUTCOME_LABELS = { page: 'Página', canvas: 'Diagrama / canvas', plan: 'Planning', issue: 'Ticket de seguimiento', file: 'Archivo', external: 'Documento externo' };
 export const OUTCOME_ICONS = { page: '📄', canvas: '🧩', plan: '🗓', issue: '📋', file: '📎', external: '🔗' };
 
 export const EMPTY_IDEA = { type: 'idea', status: 'seed', summary: '', seeds: [], steps: [], outcomes: [] };

@@ -259,7 +259,7 @@ export default function GraphView({ data, settings, onSettings, focusId = null, 
                 : n.kind === 'issue'
                   ? n.status === 'blocked'
                     ? colors.danger
-                    : n.status === 'resolved' || n.status === 'closed'
+                    : n.status === 'done'
                       ? colors.success
                       : colors.warn
                   : colors.node);

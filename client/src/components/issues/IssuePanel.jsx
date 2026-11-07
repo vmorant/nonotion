@@ -3,22 +3,8 @@ import { Link } from 'react-router-dom';
 import MarkdownIt from 'markdown-it';
 import { Plus, Trash2, Send, Link2 } from 'lucide-react';
 import { api } from '../../api.js';
-import {
-  STATUSES,
-  STATUS_LABELS,
-  TYPES,
-  TYPE_LABELS,
-  TYPE_ICONS,
-  PRIORITIES,
-  PRIORITY_LABELS,
-  LINK_TYPES,
-  LINK_LABELS,
-  LINK_INVERSE,
-  FIELD_LABELS,
-  valueLabel,
-  fmtWhen,
-  overdue,
-} from './model.js';
+import { LINK_TYPES, LINK_LABELS, LINK_INVERSE, CATEGORY_LABELS, fmtWhen, peopleIn } from './model.js';
+import { FieldEditor, OptionMenu, StatusPill } from './fields.jsx';
 
 // Panel de un elemento de seguimiento (encima y debajo de su descripción):
 // campos (estado, tipo, prioridad, responsable, fecha, hito), relaciones con
@@ -27,18 +13,14 @@ import {
 const md = new MarkdownIt({ html: false, linkify: true, breaks: true });
 const ICON = { size: 14, strokeWidth: 1.9 };
 
-export function StatusPill({ status }) {
-  return <span className={`issue-status status-${status}`}>{STATUS_LABELS[status] || status}</span>;
-}
-
 export function IssueRefLink({ t }) {
   if (!t) return null;
   return (
-    <Link to={`/p/${t.id}`} className={'issue-link-target' + (t.status ? ` status-${t.status}` : '')}>
-      <span className="issue-link-icon">{t.icon || (t.kind === 'canvas' ? '🧩' : t.kind === 'idea' ? '💡' : '📄')}</span>
+    <Link to={`/p/${t.id}`} className={'issue-link-target' + (t.category ? ` cat-${t.category}` : '')}>
+      <span className="issue-link-icon">{t.icon || (t.kind === 'canvas' ? '🧩' : t.kind === 'idea' ? '💡' : t.kind === 'tracker' ? '📋' : '📄')}</span>
       {t.key && <span className="issue-key">{t.key}</span>}
       <span className="issue-link-title">{t.title || 'Sin título'}</span>
-      {t.status && <StatusPill status={t.status} />}
+      {t.status && <StatusPill status={{ name: t.status, color: t.color, category: t.category }} />}
     </Link>
   );
 }
@@ -56,7 +38,7 @@ function TargetPicker({ pages, exclude, onPick }) {
   }, [pages, q, exclude]);
   return (
     <div className="issue-picker">
-      <input autoFocus placeholder="Buscar página, idea o elemento (AXA-12)…" value={q} onChange={(e) => setQ(e.target.value)} />
+      <input autoFocus placeholder="Buscar página, idea o ticket (BLQ-12)…" value={q} onChange={(e) => setQ(e.target.value)} />
       <div className="issue-picker-list">
         {list.map((p) => (
           <button key={p.id} onClick={() => onPick(p)}>
@@ -71,81 +53,42 @@ function TargetPicker({ pages, exclude, onPick }) {
   );
 }
 
-// Campos del elemento: van justo bajo el título
+// Campos del ticket (estado y los de su lista): van justo bajo el título
 export function IssueFields({ detail, members = [], onUpdate, readOnly }) {
-  const [assignee, setAssignee] = useState(detail.assignee || '');
-  const [milestone, setMilestone] = useState(detail.milestone || '');
-  useEffect(() => setAssignee(detail.assignee || ''), [detail.assignee]);
-  useEffect(() => setMilestone(detail.milestone || ''), [detail.milestone]);
-  const commitText = (field, value) => {
-    const v = value.trim() || null;
-    if (v !== (detail[field] || null)) onUpdate({ [field]: v });
-  };
+  const config = detail.tracker.config;
+  const people = [...new Set([...members, ...peopleIn([detail], config)])];
+  const listId = `people-issue-${detail.page_id}`;
   return (
     <div className="issue-fields">
+      <datalist id={listId}>
+        {people.map((p) => (
+          <option key={p} value={p} />
+        ))}
+      </datalist>
       <span className="issue-key big">{detail.key}</span>
-      <label className="issue-field">
+      <div className="issue-field">
         <span>Estado</span>
-        <select className={`status-${detail.status}`} value={detail.status} disabled={readOnly} onChange={(e) => onUpdate({ status: e.target.value })}>
-          {STATUSES.map((s) => (
-            <option key={s} value={s}>
-              {STATUS_LABELS[s]}
-            </option>
-          ))}
-        </select>
-      </label>
-      <label className="issue-field">
-        <span>Tipo</span>
-        <select value={detail.type} disabled={readOnly} onChange={(e) => onUpdate({ type: e.target.value })}>
-          {TYPES.map((t) => (
-            <option key={t} value={t}>
-              {TYPE_ICONS[t]} {TYPE_LABELS[t]}
-            </option>
-          ))}
-        </select>
-      </label>
-      <label className="issue-field">
-        <span>Prioridad</span>
-        <select className={`prio-${detail.priority}`} value={detail.priority} disabled={readOnly} onChange={(e) => onUpdate({ priority: e.target.value })}>
-          {PRIORITIES.map((p) => (
-            <option key={p} value={p}>
-              {PRIORITY_LABELS[p]}
-            </option>
-          ))}
-        </select>
-      </label>
-      <label className="issue-field">
-        <span>Responsable</span>
-        <input
-          list="issue-assignees"
-          value={assignee}
-          placeholder="Sin asignar"
+        <OptionMenu
+          options={config.statuses}
+          value={detail.status}
           disabled={readOnly}
-          onChange={(e) => setAssignee(e.target.value)}
-          onBlur={() => commitText('assignee', assignee)}
-          onKeyDown={(e) => e.key === 'Enter' && e.currentTarget.blur()}
+          onChange={(v) => v && onUpdate({ status: v })}
+          renderValue={(s) => <StatusPill status={s[0]} />}
         />
-        <datalist id="issue-assignees">
-          {members.map((m) => (
-            <option key={m} value={m} />
-          ))}
-        </datalist>
-      </label>
-      <label className={'issue-field' + (overdue(detail) ? ' overdue' : '')}>
-        <span>Fecha límite</span>
-        <input type="date" value={detail.due_date || ''} disabled={readOnly} onChange={(e) => onUpdate({ due_date: e.target.value || null })} />
-      </label>
-      <label className="issue-field">
-        <span>Hito</span>
-        <input
-          value={milestone}
-          placeholder="—"
-          disabled={readOnly}
-          onChange={(e) => setMilestone(e.target.value)}
-          onBlur={() => commitText('milestone', milestone)}
-          onKeyDown={(e) => e.key === 'Enter' && e.currentTarget.blur()}
-        />
-      </label>
+      </div>
+      {config.fields.map((f) => (
+        <div key={f.id} className={`issue-field type-${f.type}`}>
+          <span>{f.name}</span>
+          <FieldEditor
+            field={f}
+            value={detail.values[f.id]}
+            category={detail.category}
+            readOnly={readOnly}
+            peopleListId={listId}
+            onChange={(v) => onUpdate({ values: { [f.id]: v } })}
+          />
+        </div>
+      ))}
       {detail.blocked_by_open > 0 && <span className="issue-blocked-badge">⛔ Bloqueado por {detail.blocked_by_open}</span>}
     </div>
   );
@@ -213,7 +156,7 @@ export function IssueActivity({ detail, pages, onChanged, readOnly }) {
             ))}
           </div>
         )}
-        {!groups.length && !detail.mentions?.length && <p className="issue-hint">Sin relaciones. Enlaza las páginas de AXA que lo documentan, de dónde sale o qué bloquea.</p>}
+        {!groups.length && !detail.mentions?.length && <p className="issue-hint">Sin relaciones. Enlaza las páginas que lo documentan, de dónde sale o qué bloquea.</p>}
         {!readOnly &&
           (adding ? (
             <div className="issue-add-link">
@@ -254,10 +197,10 @@ export function IssueActivity({ detail, pages, onChanged, readOnly }) {
                 <span className={'issue-by' + (/^Claude/.test(e.by || '') ? ' claude' : '')}>{e.by || '?'}</span>
                 <span className="issue-when">{fmtWhen(e.at)}</span>
               </div>
-              {e.kind === 'created' && <div>creó el elemento</div>}
+              {e.kind === 'created' && <div>creó el ticket{e.data?.status ? ` (${e.data.status})` : ''}</div>}
               {e.kind === 'change' && (
                 <div>
-                  {FIELD_LABELS[e.data.field] || e.data.field}: <s>{valueLabel(e.data.field, e.data.from)}</s> → <strong>{valueLabel(e.data.field, e.data.to)}</strong>
+                  {e.data.name || e.data.field}: <s>{e.data.from || '—'}</s> → <strong>{e.data.to || '—'}</strong>
                 </div>
               )}
               {e.kind === 'link' && (

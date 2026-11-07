@@ -176,7 +176,11 @@ export const api = {
   pageMarkdown: (id) => req(`/api/pages/${id}/markdown`),
   capture: (data) => req('/api/capture', { method: 'POST', body: JSON.stringify(data) }),
   graph: () => req('/api/graph'),
-  // Seguimiento (bloqueos, problemas, riesgos, tareas…)
+  // Seguimiento: listas (trackers) y tickets
+  trackers: () => req('/api/trackers'),
+  createTracker: (data) => req('/api/trackers', { method: 'POST', body: JSON.stringify(data) }),
+  tracker: (id) => req(`/api/pages/${id}/tracker`),
+  updateTracker: (id, data) => req(`/api/pages/${id}/tracker`, { method: 'PATCH', body: JSON.stringify(data) }),
   issues: (params = {}) => req(`/api/issues?${new URLSearchParams(Object.entries(params).filter(([, v]) => v !== undefined && v !== '' && v !== null))}`),
   createIssue: (data) => req('/api/issues', { method: 'POST', body: JSON.stringify(data) }),
   issue: (id) => req(`/api/pages/${id}/issue`),
