@@ -12,7 +12,7 @@ const ICON = { size: 15, strokeWidth: 1.9 };
 
 function NewTrackerDialog({ templates, pages, onCreate, onClose }) {
   const [title, setTitle] = useState('');
-  const [template, setTemplate] = useState('blockers');
+  const [template, setTemplate] = useState('issues');
   const [parent, setParent] = useState('');
   const [prefix, setPrefix] = useState('');
   const [busy, setBusy] = useState(false);
@@ -52,7 +52,7 @@ function NewTrackerDialog({ templates, pages, onCreate, onClose }) {
           <label>
             Dentro de
             <select value={parent} onChange={(e) => setParent(e.target.value)}>
-              <option value="">(raíz del espacio)</option>
+              <option value="">Sin página (lista independiente, solo en Seguimiento)</option>
               {parents.map((p) => (
                 <option key={p.id} value={p.id}>
                   {p.icon || '📄'} {p.title || 'Sin título'}
@@ -133,6 +133,22 @@ function BlockedItem({ i, onOpen }) {
   );
 }
 
+// Listas agrupadas por la página a la que pertenecen; las independientes, al final
+function groupTrackers(trackers, pages, q) {
+  const t = q.trim().toLowerCase();
+  const byId = new Map(pages.map((p) => [p.id, p]));
+  const groups = new Map();
+  for (const tr of trackers) {
+    const page = tr.parent_id ? byId.get(tr.parent_id) : null;
+    const hay = `${tr.title} ${tr.prefix} ${page?.title || 'sin página'}`.toLowerCase();
+    if (t && !hay.includes(t)) continue;
+    const key = page ? page.id : '';
+    if (!groups.has(key)) groups.set(key, { key, page, items: [] });
+    groups.get(key).items.push(tr);
+  }
+  return [...groups.values()].sort((a, b) => (!a.page ? 1 : !b.page ? -1 : (a.page.title || '').localeCompare(b.page.title || '', 'es')));
+}
+
 export default function IssuesView({ pages, onChanged }) {
   const [params, setParams] = useSearchParams();
   const tab = params.get('v') || 'lists';
@@ -141,6 +157,7 @@ export default function IssuesView({ pages, onChanged }) {
   const [creating, setCreating] = useState(false);
   const [q, setQ] = useState('');
   const [onlyActive, setOnlyActive] = useState(true);
+  const [listQ, setListQ] = useState('');
   const [error, setError] = useState(null);
   const navigate = useNavigate();
 
@@ -216,10 +233,26 @@ export default function IssuesView({ pages, onChanged }) {
               <p>Todavía no hay listas. Crea la primera desde una plantilla (Bloqueos, To-do, Temas) o en blanco, y colócala donde quieras del árbol.</p>
             </div>
           )}
+          {data.trackers.length > 0 && (
+            <div className="issues-filters">
+              <input className="issues-search" placeholder="Filtrar listas por nombre, prefijo o página…" value={listQ} onChange={(e) => setListQ(e.target.value)} />
+            </div>
+          )}
+          {groupTrackers(data.trackers, pages, listQ).map((g) => (
+          <section key={g.key} className="tracker-group-section">
+            <h3 className="tracker-group-title">
+              {g.page ? (
+                <>
+                  📍 {g.page.icon || '📄'} {g.page.title || 'Sin título'}
+                </>
+              ) : (
+                '🗂 Sin página (independientes)'
+              )}
+              <span className="issues-count">{g.items.length}</span>
+            </h3>
           <div className="tracker-cards">
-            {data.trackers.map((t) => {
+            {g.items.map((t) => {
               const open = t.counts.todo + t.counts.doing + t.counts.blocked;
-              const parent = t.parent_id ? pages.find((p) => p.id === t.parent_id) : null;
               return (
                 <button key={t.id} className="tracker-card-big" onClick={() => navigate(`/p/${t.id}`)}>
                   <div className="tracker-card-title">
@@ -227,7 +260,6 @@ export default function IssuesView({ pages, onChanged }) {
                     <span>{t.title}</span>
                     <span className="issues-prefix">{t.prefix}</span>
                   </div>
-                  {parent && <div className="issue-hint">en {parent.title || 'Sin título'}</div>}
                   <div className="tracker-card-counts">
                     {CATEGORIES.map((c) =>
                       t.counts[c] ? (
@@ -245,6 +277,8 @@ export default function IssuesView({ pages, onChanged }) {
               );
             })}
           </div>
+          </section>
+          ))}
         </>
       )}
 

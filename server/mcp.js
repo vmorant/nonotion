@@ -161,7 +161,8 @@ export function mountMcp(app, port) {
           const ideas = all.filter((p) => p.kind === 'idea');
           const issues = all.filter((p) => p.kind === 'issue');
           const trackersN = all.filter((p) => p.kind === 'tracker').length;
-          const pages = all.filter((p) => p.kind !== 'idea' && p.kind !== 'issue');
+          // las listas sin página no están en el árbol (solo en Seguimiento: list_trackers)
+          const pages = all.filter((p) => p.kind !== 'idea' && p.kind !== 'issue' && !(p.kind === 'tracker' && !p.parent_id));
           const ws = (await (await api('/api/workspaces')).json()).workspaces?.[0];
           let head = ws ? `Espacio: ${ws.icon || ''} ${ws.name} (este conector solo ve este espacio)\n` : '';
           head += ideas.length ? `Ideas en desarrollo (fuera del árbol): ${ideas.length} → list_ideas\n` : '';
@@ -821,11 +822,11 @@ export function mountMcp(app, port) {
       {
         title: 'Crear lista de seguimiento',
         description:
-          'Crea una lista de seguimiento (página del árbol con tickets, como un tablero de Jira ligero) a partir de una plantilla: blockers (bloqueos e impedimentos), todo (tareas), topics (temas y decisiones) o blank. Úsala solo cuando el usuario lo pida; elige el padre temático (p. ej. la página del proyecto).',
+          'Crea una lista de seguimiento (tickets con campos propios, como un Jira ligero) a partir de una plantilla: issues (incidencias y mejoras), blockers (bloqueos e impedimentos), todo (tareas), topics (temas y decisiones) o blank. Puede ir dentro de una página (parent_id: aparece bajo ella en el árbol) o sin página (solo en Seguimiento). Úsala solo cuando el usuario lo pida.',
         inputSchema: {
           title: z.string().describe('Nombre de la lista, p. ej. "Bloqueantes AXA"'),
-          template: z.enum(['blockers', 'todo', 'topics', 'blank']).optional().describe('Por defecto blank'),
-          parent_id: z.string().optional().describe('Página bajo la que va (sin él, en la raíz)'),
+          template: z.enum(['issues', 'blockers', 'todo', 'topics', 'blank']).optional().describe('Por defecto blank'),
+          parent_id: z.string().optional().describe('Página a la que pertenece (sin él, lista independiente: solo en Seguimiento, no en el árbol)'),
           prefix: z.string().optional().describe('Prefijo de las claves (letras y números, p. ej. BLQ); por defecto el de la plantilla o derivado del título'),
           icon: z.string().optional(),
         },
@@ -856,6 +857,7 @@ export function mountMcp(app, port) {
                 name: z.string(),
                 type: z.enum(['select', 'multi', 'text', 'number', 'date', 'person', 'checkbox', 'url']),
                 options: z.array(z.string()).optional().describe('Opciones de un desplegable'),
+                date_role: z.enum(['deadline', 'start', 'event', 'other']).optional().describe('Para fechas: qué significa en el calendario (fecha límite, inicio, evento u otra)'),
               })
             )
             .optional(),
@@ -871,7 +873,14 @@ export function mountMcp(app, port) {
           const config = JSON.parse(JSON.stringify(t.config));
           const COLORS = ['blue', 'green', 'yellow', 'orange', 'red', 'purple', 'pink', 'teal', 'gray'];
           const optsOf = (names, start = 0) => names.map((n, i) => ({ name: n, color: COLORS[(start + i) % COLORS.length] }));
-          for (const f of add_fields) config.fields.push({ name: f.name, type: f.type, ...(f.type === 'select' || f.type === 'multi' ? { options: optsOf(f.options || []) } : {}) });
+          for (const f of add_fields) {
+            config.fields.push({
+              name: f.name,
+              type: f.type,
+              ...(f.type === 'select' || f.type === 'multi' ? { options: optsOf(f.options || []) } : {}),
+              ...(f.type === 'date' && f.date_role ? { date_role: f.date_role } : {}),
+            });
+          }
           for (const a of add_options) {
             const f = config.fields.find((x) => x.name.toLowerCase() === a.field.toLowerCase() || x.id === a.field);
             if (!f || !f.options) return fail(new Error(`«${a.field}» no es un desplegable de la lista`));
@@ -987,17 +996,31 @@ export function mountMcp(app, port) {
       {
         title: 'Relacionar ticket',
         description:
-          'Añade o quita una relación de un ticket: bloquea a otro ticket, relacionado con, documentado en una página, o viene de (idea, acta, página). Para quitar, pasa remove=true con el mismo tipo y destino.',
+          'Añade o quita una relación de un ticket (o de una lista entera con tracker): bloquea a otro ticket, relacionado con, documentado en, o viene de. El destino puede ser cualquier página, canvas, idea, evento (página con fecha), lista o ticket. Para quitar, pasa remove=true con el mismo tipo y destino.',
         inputSchema: {
-          issue: issueRef,
+          issue: issueRef.optional(),
+          tracker: trackerRef.optional().describe('En lugar de issue: relacionar la lista entera (no admite "blocks")'),
           type: linkSchema.shape.type,
           target: linkSchema.shape.target,
           remove: z.boolean().optional(),
         },
       },
-      async ({ issue, type, target, remove }) => {
+      async ({ issue, tracker, type, target, remove }) => {
         try {
-          const id = await resolveIssue(issue);
+          if (!issue && !tracker) return fail(new Error('Indica issue (ticket) o tracker (lista)'));
+          const id = tracker ? (await resolveTracker(tracker)).id : await resolveIssue(issue);
+          if (tracker) {
+            if (remove) {
+              const d = await (await api(`/api/pages/${id}/tracker`)).json();
+              const tid = /^[A-Za-z][A-Za-z0-9]{0,9}-\d+$/.test(target) ? await resolveIssue(target) : target;
+              const l = d.links.find((x) => x.type === type && x.target_id === tid);
+              if (!l) return fail(new Error('Esa relación no existe'));
+              await api(`/api/pages/${id}/issue/links/${l.id}`, { method: 'DELETE' });
+              return ok('Relación de la lista quitada.');
+            }
+            const d = await (await api(`/api/pages/${id}/issue/links`, { method: 'POST', body: JSON.stringify({ type, target }) })).json();
+            return ok(`Lista ${d.prefix}: ${d.links.length} relación(es).`);
+          }
           if (remove) {
             const d = await (await api(`/api/pages/${id}/issue`)).json();
             const tid = /^[A-Za-z][A-Za-z0-9]{0,9}-\d+$/.test(target) ? await resolveIssue(target) : target;
@@ -1008,6 +1031,62 @@ export function mountMcp(app, port) {
           }
           const d = await (await api(`/api/pages/${id}/issue/links`, { method: 'POST', body: JSON.stringify({ type, target }) })).json();
           return ok(`${d.key}: ${d.links.length} relación(es) salientes, ${d.incoming.length} entrantes.`);
+        } catch (e) {
+          return fail(e);
+        }
+      }
+    );
+
+    server.registerTool(
+      'agenda',
+      {
+        title: 'Agenda y calendario',
+        description:
+          'Qué hay en unas fechas: eventos y reuniones (páginas con fecha), fechas de tickets de las listas de seguimiento por tipo (fecha límite, inicio, evento, otra) y, si se pide, páginas creadas o modificadas. Incluye las fechas límite vencidas de tickets abiertos. Úsala para "¿qué vence esta semana?", "¿qué tengo el jueves?", "¿qué está vencido?".',
+        inputSchema: {
+          from: z.string().optional().describe('AAAA-MM-DD (por defecto hoy)'),
+          to: z.string().optional().describe('AAAA-MM-DD (por defecto dentro de 14 días)'),
+          kinds: z
+            .array(z.enum(['events', 'deadline', 'start', 'event', 'other', 'created', 'edited']))
+            .optional()
+            .describe('Qué incluir: events (páginas con fecha), deadline/start/event/other (fechas de tickets), created/edited (actividad). Por defecto todo menos created/edited'),
+          tracker: trackerRef.optional().describe('Solo las fechas de esta lista'),
+          include_done: z.boolean().optional().describe('Incluir tickets hechos (por defecto no)'),
+        },
+      },
+      async ({ from, to, kinds, tracker, include_done }) => {
+        try {
+          const day = (d) => d.toISOString().slice(0, 10);
+          const f = from || day(new Date());
+          const t = to || day(new Date(Date.now() + 14 * 86400000));
+          const want = new Set(kinds?.length ? kinds : ['events', 'deadline', 'start', 'event', 'other']);
+          const trackerId = tracker ? (await resolveTracker(tracker)).id : null;
+          const d = await (await api(`/api/calendar?from=${f}&to=${t}&overdue=${day(new Date())}`)).json();
+          const lines = [];
+          const overdue = d.issues.filter((i) => i.overdue && i.day < f && (!trackerId || i.tracker_id === trackerId));
+          if (overdue.length && want.has('deadline')) {
+            lines.push('## ⚠ Vencido', ...overdue.map((i) => `- ${i.day} · ${i.key} ${i.title} (${i.tracker_title}, ${i.status_name}) — ${i.field}`), '');
+          }
+          const items = [];
+          if (want.has('events') && !trackerId) for (const p of d.dated) items.push({ day: p.day, text: `📅 Evento: ${p.title || 'Sin título'} (id: ${p.id})` });
+          for (const i of d.issues) {
+            if (i.day < f || !want.has(i.role) || (trackerId && i.tracker_id !== trackerId)) continue;
+            if (!include_done && i.category === 'done') continue;
+            const label = { deadline: '⏰ Vence', start: '▶ Empieza', event: '📌 Evento', other: '• Fecha' }[i.role];
+            items.push({ day: i.day, text: `${label}: ${i.key} ${i.title} — ${i.field} (${i.tracker_title}, ${i.status_name})${i.overdue ? ' ⚠ vencido' : ''}` });
+          }
+          if (want.has('created') && !trackerId) for (const p of d.created) items.push({ day: p.day, text: `✚ Creada: ${p.title || 'Sin título'} (id: ${p.id})` });
+          if (want.has('edited') && !trackerId) for (const p of d.edited) items.push({ day: p.day, text: `✎ Editada: ${p.title || 'Sin título'} (id: ${p.id})` });
+          items.sort((a, b) => a.day.localeCompare(b.day));
+          let cur = null;
+          for (const it of items) {
+            if (it.day !== cur) {
+              lines.push(`## ${it.day}`);
+              cur = it.day;
+            }
+            lines.push(`- ${it.text}`);
+          }
+          return ok(lines.length ? lines.join('\n') : `Nada entre ${f} y ${t}.`);
         } catch (e) {
           return fail(e);
         }

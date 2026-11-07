@@ -11,6 +11,7 @@ const ext = (name = '') => name.slice(name.lastIndexOf('.')).toLowerCase();
 export function previewKind(file) {
   const mime = file.mime || '';
   if (mime === 'application/pdf') return 'pdf';
+  if (/^(text\/html|application\/xhtml\+xml)/.test(mime) || ['.html', '.htm', '.xhtml'].includes(ext(file.name))) return 'html';
   if (mime.startsWith('image/')) return 'image';
   if (mime.startsWith('video/')) return 'video';
   if (mime.startsWith('audio/')) return 'audio';
@@ -242,6 +243,9 @@ export default function FileViewer({ file, onClose }) {
   const detected = previewKind(file);
   const kind = detected === 'sheet' && asPdf ? 'office' : detected;
   const canPdf = OFFICE_EXTS.includes(ext(file.name));
+  const [htmlSource, setHtmlSource] = useState(false); // HTML: ver código en vez de la página
+  // El HTML se abre siempre por /view: aislado (sandbox), también en pestaña nueva
+  const openUrl = kind === 'html' ? `/files/${file.id}/view` : url;
 
   useEffect(() => {
     const onKey = (e) => e.key === 'Escape' && onClose();
@@ -251,11 +255,16 @@ export default function FileViewer({ file, onClose }) {
 
   return (
     <div className="modal-backdrop" onClick={onClose}>
-      <div className={'viewer-modal' + (kind === 'sheet' ? ' wide' : '')} onClick={(e) => e.stopPropagation()}>
+      <div className={'viewer-modal' + (kind === 'sheet' || kind === 'html' ? ' wide' : '')} onClick={(e) => e.stopPropagation()}>
         <div className="viewer-bar">
           <span className="viewer-title">{file.name}</span>
           <div className="viewer-actions">
-            <a className="btn" href={url} target="_blank" rel="noreferrer">
+            {kind === 'html' && (
+              <button className="btn" onClick={() => setHtmlSource((v) => !v)}>
+                {htmlSource ? '👁 Ver página' : '</> Ver código'}
+              </button>
+            )}
+            <a className="btn" href={openUrl} target="_blank" rel="noreferrer">
               Abrir en pestaña
             </a>
             <a className="btn" href={url} download={file.name}>
@@ -268,6 +277,15 @@ export default function FileViewer({ file, onClose }) {
         </div>
         <div className="viewer-body">
           {kind === 'pdf' && <iframe className="viewer-frame" src={url} title={file.name} />}
+          {kind === 'html' && !htmlSource && (
+            <iframe
+              className="viewer-frame viewer-html"
+              src={`/files/${file.id}/view`}
+              title={file.name}
+              sandbox="allow-scripts allow-popups allow-popups-to-escape-sandbox allow-forms allow-modals allow-downloads"
+            />
+          )}
+          {kind === 'html' && htmlSource && <TextView url={url} />}
           {kind === 'office' && <OfficeFrame file={file} />}
           {kind === 'sheet' && <SheetView file={file} onFallback={canPdf ? () => setAsPdf(true) : null} />}
           {kind === 'image' && <img className="viewer-image" src={url} alt={file.name} />}

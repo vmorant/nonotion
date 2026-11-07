@@ -35,11 +35,13 @@ export default function MoveDialog({ page, pages, onMove, onClose }) {
       }
       return parts.join(' / ');
     };
+    // Solo páginas que admiten contenido dentro (no ideas, listas ni tickets)
     const list = pages
-      .filter((p) => !excluded.has(p.id))
+      .filter((p) => !excluded.has(p.id) && !['idea', 'issue', 'tracker'].includes(p.kind))
       .map((p) => ({ id: p.id, icon: p.icon || '📄', path: pathOf(p), current: p.id === page.parent_id }));
     list.sort((a, b) => a.path.localeCompare(b.path, 'es'));
-    return [{ id: null, icon: '↥', path: 'Raíz del espacio', current: !page.parent_id }, ...list];
+    const root = page.kind === 'tracker' ? 'Sin página (lista independiente, solo en Seguimiento)' : 'Raíz del espacio';
+    return [{ id: null, icon: '↥', path: root, current: !page.parent_id }, ...list];
   }, [page, pages]);
 
   const shown = q.trim() ? options.filter((o) => fold(o.path).includes(fold(q.trim()))) : options;
@@ -78,7 +80,7 @@ export default function MoveDialog({ page, pages, onMove, onClose }) {
         }}
       >
         <div className="move-title">
-          Mover «{page.title || 'Sin título'}» (con sus subpáginas) a…
+          {page.kind === 'tracker' ? `Vincular la lista «${page.title || 'Sin título'}» a…` : `Mover «${page.title || 'Sin título'}» (con sus subpáginas) a…`}
         </div>
         <input ref={inputRef} value={q} onChange={(e) => setQ(e.target.value)} placeholder="Buscar página destino…" />
         {error && <div className="ws-error">⚠ {error}</div>}

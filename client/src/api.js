@@ -205,7 +205,7 @@ export const api = {
   trashFiles: () => req('/api/trash/files'),
   restoreTrashFile: (id) => req(`/api/trash/files/${id}/restore`, { method: 'POST' }),
   deleteTrashFile: (id) => req(`/api/trash/files/${id}`, { method: 'DELETE' }),
-  calendar: (from, to) => req(`/api/calendar?from=${from}&to=${to}`),
+  calendar: (from, to, overdue) => req(`/api/calendar?from=${from}&to=${to}${overdue ? `&overdue=${overdue}` : ''}`),
   versions: (pageId) => req(`/api/pages/${pageId}/versions`),
   version: (vid) => req(`/api/versions/${vid}`),
   restoreVersion: (pageId, vid) => req(`/api/pages/${pageId}/restore-version/${vid}`, { method: 'POST' }),

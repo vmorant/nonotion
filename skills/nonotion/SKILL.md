@@ -96,6 +96,19 @@ Antes de crear, busca por si ya existe una página del tema y ofrécela.
     responsables por tu cuenta.
   - Escribir la clave (`BLQ-12`) en cualquier página la enlaza. No uses
     `move_page` con tickets ni crees páginas dentro de una lista.
+  - Una lista puede ir dentro de una página o ser independiente (sin
+    `parent_id`: solo en Seguimiento); `move_page` de la lista la vincula a
+    otra página o la saca (`new_parent_id: null`). Una lista entera también se
+    relaciona (`link_issue` con `tracker`) con páginas, canvas, ideas,
+    eventos u otras listas.
+- **Calendario y agenda**: `agenda` responde "¿qué vence esta semana?", "¿qué
+  hay el jueves?", "¿qué está vencido?". Las fechas de los tickets tienen tipo
+  (fecha límite, inicio, evento u otra) según el campo; un evento o reunión es
+  una página con `page_date`. Al añadir un campo de fecha a una lista, indica
+  su `date_role`.
+- **Informes en HTML**: si generas un informe o gráfico en HTML para NoNotion,
+  adjúntalo con `attach_file` (`.html`): se verá renderizado en el visor y en
+  una pestaña nueva (aislado).
 - **Ideas** (desarrollo de ideas, fuera del árbol; vista Ideas): una idea
   separa **semilla** (lo que llegó: texto, captura, enlace, fragmento de una
   página; no se reescribe), **desarrollo** (pasos fechados) y **resultado**

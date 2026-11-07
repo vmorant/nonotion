@@ -116,6 +116,17 @@ test('adjuntos HTML/SVG no se ejecutan en nuestro dominio', async () => {
   const svg = await up('x.svg', 'image/svg+xml', '<svg xmlns="http://www.w3.org/2000/svg"><script>alert(1)</script></svg>');
   r = await call(`/files/${svg.id}/x.svg`, tokA);
   assert.match(r.headers.get('content-security-policy') || '', /sandbox/);
+  // vista renderizada: HTML de verdad, pero en origen opaco (sin allow-same-origin)
+  r = await call(`/files/${html.id}/view`, tokA);
+  assert.equal(r.status, 200);
+  assert.match(r.headers.get('content-type'), /^text\/html/);
+  const csp = r.headers.get('content-security-policy') || '';
+  assert.match(csp, /^sandbox allow-scripts/);
+  assert.doesNotMatch(csp, /allow-same-origin/, 'nunca con el origen de NoNotion');
+  assert.match(r.text, /<script>alert\(1\)<\/script>/);
+  assert.equal((await call(`/files/${html.id}/view`, tokB)).status, 404, 'otro espacio no la ve');
+  const svgView = await call(`/files/${svg.id}/view`, tokA);
+  assert.doesNotMatch(svgView.headers.get('content-type') || '', /text\/html/, 'solo para HTML');
   const png = await up('a.png', 'image/png', 'x');
   r = await call(`/files/${png.id}/a.png`, tokA);
   assert.equal(r.headers.get('content-type'), 'image/png');

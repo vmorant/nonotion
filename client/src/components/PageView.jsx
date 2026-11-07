@@ -73,6 +73,7 @@ export default function PageView({
   onWorkspaceSeen,
   allTags = [],
   members = [],
+  onMove,
 }) {
   const { id } = useParams();
   const navigate = useNavigate();
@@ -714,7 +715,7 @@ export default function PageView({
         {isIssue && issue.error && <div className="issue-error">⚠ {issue.error}</div>}
 
         {isTracker ? (
-          <TrackerView key={id} pageId={id} pageEvent={pageEvent} members={members} onTreeChange={onTreeChange} />
+          <TrackerView key={id} pageId={id} pageEvent={pageEvent} members={members} pages={pages} onMove={onMove} onTreeChange={onTreeChange} />
         ) : isIdea ? (
           <IdeaView
             key={id}

@@ -7,7 +7,17 @@ const CONTEXT_LINKS = ['origin', 'documents', 'relates'];
 // Alta rápida de un ticket eligiendo la lista. Puede venir prellenado desde
 // una página (la selección como título y la relación con ella) o desde una idea.
 // El resto de campos de la lista se rellenan después en el ticket.
-export default function NewIssueDialog({ initial = {}, context, trackerId: fixedTracker, onCreate, onClose }) {
+// La fecha de un día del calendario va al campo de fecha más apropiado de la lista
+function dateFieldFor(tracker) {
+  const dates = (tracker?.config.fields || []).filter((f) => f.type === 'date');
+  for (const role of ['deadline', 'event', 'start', 'other']) {
+    const f = dates.find((x) => (x.date_role || 'other') === role);
+    if (f) return f;
+  }
+  return null;
+}
+
+export default function NewIssueDialog({ initial = {}, context, trackerId: fixedTracker, initialDate = null, onCreate, onClose }) {
   const [trackers, setTrackers] = useState(null);
   const [trackerId, setTrackerId] = useState(fixedTracker || '');
   const [title, setTitle] = useState(initial.title || '');
@@ -61,6 +71,7 @@ export default function NewIssueDialog({ initial = {}, context, trackerId: fixed
         title: title.trim(),
         description: description.trim() || undefined,
         ...(context ? { links: [{ type: linkType, target: context.id }] } : {}),
+        ...(initialDate && dateFieldFor(tracker) ? { values: { [dateFieldFor(tracker).id]: initialDate } } : {}),
       });
     } catch (err) {
       setError(err.message);
@@ -113,6 +124,11 @@ export default function NewIssueDialog({ initial = {}, context, trackerId: fixed
         )}
         <input ref={ref} className="issue-new-name" value={title} maxLength={300} placeholder="Título del ticket" onChange={(e) => setTitle(e.target.value)} />
         <textarea rows={4} placeholder="Descripción (opcional, Markdown)" value={description} onChange={(e) => setDescription(e.target.value)} />
+        {initialDate && (
+          <p className="issue-hint">
+            {dateFieldFor(tracker) ? `${dateFieldFor(tracker).name}: ${initialDate}` : `Esta lista no tiene campos de fecha: el ticket se creará sin fecha (añade uno en ⚙ Campos).`}
+          </p>
+        )}
         {tracker && tracker.config.fields.length > 0 && (
           <p className="issue-hint">Después podrás rellenar: {tracker.config.fields.map((f) => f.name).join(', ')}.</p>
         )}
