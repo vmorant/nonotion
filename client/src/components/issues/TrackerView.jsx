@@ -3,6 +3,8 @@ import { Link, useNavigate } from 'react-router-dom';
 import { Plus, Settings2, LayoutList, Columns3, Search, ArrowUp, ArrowDown, Trash2, X, GripVertical } from 'lucide-react';
 import { api } from '../../api.js';
 import { FieldEditor, OptionMenu, Pill, StatusPill } from './fields.jsx';
+import { TargetPicker, IssueRefLink } from './IssuePanel.jsx';
+import MoveDialog from '../MoveDialog.jsx';
 import {
   CATEGORIES,
   CATEGORY_LABELS,
@@ -11,6 +13,10 @@ import {
   FIELD_TYPE_ICONS,
   COLORS,
   COLOR_LABELS,
+  DATE_ROLES,
+  DATE_ROLE_LABELS,
+  LINK_LABELS,
+  LINK_INVERSE,
   newId,
   valueLabel,
   peopleIn,
@@ -195,6 +201,18 @@ function TrackerSettings({ detail, onSave, onClose }) {
                 {(f.type === 'select' || f.type === 'multi') && (
                   <OptionsEditor options={f.options || []} onChange={(options) => setFields(fields.map((x, j) => (j === i ? { ...x, options } : x)))} />
                 )}
+                {f.type === 'date' && (
+                  <div className="cfg-row cfg-sub">
+                    <span className="issue-hint">En el calendario es</span>
+                    <select value={f.date_role || 'other'} onChange={(e) => setFields(fields.map((x, j) => (j === i ? { ...x, date_role: e.target.value } : x)))}>
+                      {DATE_ROLES.map((r) => (
+                        <option key={r} value={r}>
+                          {DATE_ROLE_LABELS[r]}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                )}
               </div>
             ))}
             <div className="cfg-add-field">
@@ -206,7 +224,13 @@ function TrackerSettings({ detail, onSave, onClose }) {
                   onClick={() =>
                     setFields([
                       ...fields,
-                      { id: newId(), name: FIELD_TYPE_LABELS[t], type: t, ...(t === 'select' || t === 'multi' ? { options: [] } : {}) },
+                      {
+                        id: newId(),
+                        name: FIELD_TYPE_LABELS[t],
+                        type: t,
+                        ...(t === 'select' || t === 'multi' ? { options: [] } : {}),
+                        ...(t === 'date' ? { date_role: 'deadline' } : {}),
+                      },
                     ])
                   }
                 >
@@ -232,7 +256,110 @@ function TrackerSettings({ detail, onSave, onClose }) {
 
 // ---------- Vista de la lista ----------
 
-export default function TrackerView({ pageId, pageEvent, members = [], onTreeChange, readOnly = false, initial = null }) {
+// Dónde está la lista (en una página o independiente) y con qué se relaciona
+function TrackerContext({ detail, pages, onMove, onChanged }) {
+  const [moving, setMoving] = useState(false);
+  const [adding, setAdding] = useState(false);
+  const [linkType, setLinkType] = useState('relates');
+  const [error, setError] = useState(null);
+  const parent = detail.parent_id ? pages.find((p) => p.id === detail.parent_id) : null;
+  const self = pages.find((p) => p.id === detail.id) || { id: detail.id, title: 'Lista', kind: 'tracker' };
+  const run = async (fn) => {
+    setError(null);
+    try {
+      await fn();
+      await onChanged();
+    } catch (e) {
+      setError(e.message);
+    }
+  };
+  return (
+    <div className="tracker-context">
+      <div className="tracker-context-row">
+        <span className="tracker-context-label">📍</span>
+        {parent ? (
+          <>
+            En <IssueRefLink t={parent} />
+          </>
+        ) : (
+          <span className="issue-hint">Lista independiente: no está en el árbol, solo en Listas y Seguimiento.</span>
+        )}
+        {onMove && (
+          <>
+            <button className="btn small" onClick={() => setMoving(true)}>
+              {parent ? 'Cambiar de página' : 'Vincular a una página'}
+            </button>
+            {parent && (
+              <button className="btn small" onClick={() => run(() => onMove(detail.id, null).then((e) => e && Promise.reject(new Error(e))))}>
+                Sacar de la página
+              </button>
+            )}
+          </>
+        )}
+      </div>
+      <div className="tracker-context-row">
+        <span className="tracker-context-label">🔗</span>
+        {detail.links.map((l) => (
+          <span key={l.id} className="tracker-link-chip" title={LINK_LABELS[l.type]}>
+            <span className="issue-hint">{LINK_LABELS[l.type]}</span> <IssueRefLink t={l.target} />
+            <button className="icon-btn" title="Quitar relación" onClick={() => run(() => api.unlinkIssue(detail.id, l.id))}>
+              <X size={12} />
+            </button>
+          </span>
+        ))}
+        {detail.incoming?.map((l) => (
+          <span key={`in-${l.id}`} className="tracker-link-chip">
+            <span className="issue-hint">{LINK_INVERSE[l.type]}</span> <IssueRefLink t={l.source} />
+          </span>
+        ))}
+        {!detail.links.length && !detail.incoming?.length && !adding && <span className="issue-hint">Sin relaciones</span>}
+        {adding ? (
+          <div className="issue-add-link">
+            <select value={linkType} onChange={(e) => setLinkType(e.target.value)}>
+              {['relates', 'documents', 'origin'].map((t) => (
+                <option key={t} value={t}>
+                  {LINK_LABELS[t]}
+                </option>
+              ))}
+            </select>
+            <TargetPicker
+              pages={pages.filter((p) => p.kind !== 'issue' || p.parent_id !== detail.id)}
+              exclude={detail.id}
+              onPick={(p) =>
+                run(async () => {
+                  await api.linkIssue(detail.id, linkType, p.id);
+                  setAdding(false);
+                })
+              }
+            />
+            <button className="btn small" onClick={() => setAdding(false)}>
+              Cancelar
+            </button>
+          </div>
+        ) : (
+          <button className="btn small" onClick={() => setAdding(true)}>
+            <Plus size={13} /> Relacionar la lista
+          </button>
+        )}
+      </div>
+      {error && <div className="issue-error">⚠ {error}</div>}
+      {moving && (
+        <MoveDialog
+          page={self}
+          pages={pages}
+          onMove={async (id, parentId) => {
+            const err = await onMove(id, parentId);
+            if (!err) await onChanged();
+            return err;
+          }}
+          onClose={() => setMoving(false)}
+        />
+      )}
+    </div>
+  );
+}
+
+export default function TrackerView({ pageId, pageEvent, members = [], pages = [], onMove, onTreeChange, readOnly = false, initial = null }) {
   const [detail, setDetail] = useState(initial);
   const [error, setError] = useState(null);
   const prefKey = `nn:tracker:${pageId}`;
@@ -365,6 +492,17 @@ export default function TrackerView({ pageId, pageEvent, members = [], onTreeCha
 
   return (
     <div className="tracker-view">
+      {!readOnly && (
+        <TrackerContext
+          detail={detail}
+          pages={pages}
+          onMove={onMove}
+          onChanged={async () => {
+            await load();
+            onTreeChange?.();
+          }}
+        />
+      )}
       <datalist id={peopleListId}>
         {people.map((p) => (
           <option key={p} value={p} />

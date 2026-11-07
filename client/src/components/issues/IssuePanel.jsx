@@ -25,8 +25,18 @@ export function IssueRefLink({ t }) {
   );
 }
 
-// Selector de página o elemento destino
-function TargetPicker({ pages, exclude, onPick }) {
+// Qué es cada destino (página, canvas, idea, lista, ticket, evento)
+export function kindLabel(p) {
+  if (p.kind === 'issue') return 'Ticket';
+  if (p.kind === 'tracker') return 'Lista';
+  if (p.kind === 'idea') return 'Idea';
+  if (p.kind === 'canvas') return 'Canvas';
+  if (p.page_date) return `Evento ${p.page_date}`;
+  return 'Página';
+}
+
+// Selector de página, canvas, idea, lista, ticket o evento destino
+export function TargetPicker({ pages, exclude, onPick }) {
   const [q, setQ] = useState('');
   const list = useMemo(() => {
     const t = q.trim().toLowerCase();
@@ -38,13 +48,14 @@ function TargetPicker({ pages, exclude, onPick }) {
   }, [pages, q, exclude]);
   return (
     <div className="issue-picker">
-      <input autoFocus placeholder="Buscar página, idea o ticket (BLQ-12)…" value={q} onChange={(e) => setQ(e.target.value)} />
+      <input autoFocus placeholder="Buscar página, canvas, idea, lista, ticket (BLQ-12) o evento…" value={q} onChange={(e) => setQ(e.target.value)} />
       <div className="issue-picker-list">
         {list.map((p) => (
           <button key={p.id} onClick={() => onPick(p)}>
-            <span>{p.icon || (p.kind === 'canvas' ? '🧩' : p.kind === 'idea' ? '💡' : '📄')}</span>
+            <span>{p.icon || (p.kind === 'canvas' ? '🧩' : p.kind === 'idea' ? '💡' : p.kind === 'tracker' ? '📋' : '📄')}</span>
             {p.issue_key && <span className="issue-key">{p.issue_key}</span>}
             <span className="issue-link-title">{p.title || 'Sin título'}</span>
+            <span className="picker-kind">{kindLabel(p)}</span>
           </button>
         ))}
         {!list.length && <div className="issue-hint">Sin coincidencias</div>}

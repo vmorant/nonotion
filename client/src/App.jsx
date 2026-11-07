@@ -281,11 +281,12 @@ export default function App() {
                 onWorkspaceSeen={onWorkspaceSeen}
                 allTags={tags}
                 members={members}
+                onMove={movePage}
               />
             }
           />
           <Route path="/tags" element={<TagsView pages={pages} tags={tags} onChanged={refreshTree} />} />
-          <Route path="/calendar" element={<CalendarView />} />
+          <Route path="/calendar" element={<CalendarView onChanged={refreshTree} />} />
           <Route path="/graph" element={<GraphPage pages={pages} />} />
           <Route path="/ideas" element={<IdeasView pages={pages} onChanged={refreshTree} />} />
           <Route path="/issues" element={<IssuesView pages={pages} onChanged={refreshTree} />} />

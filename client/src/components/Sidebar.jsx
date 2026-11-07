@@ -256,7 +256,11 @@ function QuickSection({ name, title, items, byId }) {
               <span className="tree-title">
                 {p.issue_key && <span className="issue-key small">{p.issue_key}</span>} {p.title || 'Sin título'}
               </span>
-              {parent && <span className="quick-parent">{parent.title || 'Sin título'}</span>}
+              {parent ? (
+                <span className="quick-parent">{parent.title || 'Sin título'}</span>
+              ) : p.kind === 'tracker' ? (
+                <span className="quick-parent">sin página</span>
+              ) : null}
             </NavLink>
           );
         })}
@@ -349,9 +353,12 @@ export default function Sidebar({
   const ideasCount = pages.filter((p) => p.kind === 'idea').length;
   const activeIssues = pages.filter((p) => p.kind === 'issue' && ['todo', 'doing', 'blocked'].includes(p.issue_status));
   const blockedIssues = activeIssues.filter((p) => p.issue_status === 'blocked').length;
+  // Todas las listas de seguimiento (las de una página y las independientes)
+  const trackers = pages.filter((p) => p.kind === 'tracker').sort((a, b) => (a.title || '').localeCompare(b.title || '', 'es'));
   const childrenMap = new Map();
   for (const p of pages) {
     if (p.kind === 'idea' || p.kind === 'issue') continue; // viven en sus propias vistas (los tickets, dentro de su lista)
+    if (p.kind === 'tracker' && !p.parent_id) continue; // lista sin página: solo en Listas y Seguimiento
     const key = p.parent_id || null;
     if (!childrenMap.has(key)) childrenMap.set(key, []);
     childrenMap.get(key).push(p);
@@ -381,6 +388,7 @@ export default function Sidebar({
       <div className="sidebar-scroll">
       <QuickSection name="favorites" title="Favoritas" items={favorites} byId={byId} />
       <QuickSection name="recent" title="Recientes" items={recentPages} byId={byId} />
+      <QuickSection name="trackers" title="Listas" items={trackers} byId={byId} />
       <div className="sidebar-section">
         <div className="sidebar-section-title">
           <span>Páginas</span>

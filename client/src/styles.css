@@ -6799,3 +6799,196 @@ kbd {
   background: var(--bg-input);
   border-color: var(--border);
 }
+
+/* ======================= Calendario con filtros ======================= */
+.calendar-filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+  margin: 4px 0 12px;
+}
+.cal-filter {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  color: var(--text-faint);
+  padding: 3px 10px;
+  font-size: 0.8rem;
+  cursor: pointer;
+  opacity: 0.7;
+}
+.cal-filter.on {
+  opacity: 1;
+  color: var(--text);
+  border-color: var(--k, var(--accent));
+  background: color-mix(in srgb, var(--k, var(--accent)) 14%, transparent);
+}
+.cal-filter-n {
+  font-size: 0.7rem;
+  background: var(--bg-active);
+  border-radius: 999px;
+  padding: 0 6px;
+  color: var(--text-dim);
+}
+.k-events { --k: var(--accent); }
+.k-deadline { --k: var(--danger); }
+.k-start { --k: var(--success); }
+.k-event { --k: #9b6bff; }
+.k-other { --k: var(--text-dim); }
+.k-created { --k: #4caf78; }
+.k-edited { --k: #8a8a8a; }
+
+.calendar-chips .chip,
+.agenda .chip {
+  border-left: 3px solid var(--k, var(--border-strong));
+}
+.chip .chip-kind {
+  font-size: 0.75em;
+  opacity: 0.85;
+}
+.chip-key {
+  font-family: 'JetBrains Mono Variable', monospace;
+  font-size: 0.85em;
+  color: var(--accent-text);
+}
+.chip.done {
+  text-decoration: line-through;
+  opacity: 0.6;
+}
+.chip.overdue {
+  color: var(--danger);
+  font-weight: 600;
+}
+.calendar-add-wrap {
+  position: relative;
+}
+.calendar-add-menu {
+  position: absolute;
+  right: 0;
+  top: calc(100% + 4px);
+  z-index: 30;
+  background: var(--bg-elev);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+  box-shadow: 0 10px 28px var(--shadow-color);
+  padding: 4px;
+  display: flex;
+  flex-direction: column;
+  min-width: 210px;
+}
+.calendar-add-menu button {
+  text-align: left;
+  background: none;
+  border: none;
+  color: var(--text);
+  padding: 6px 8px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  font-size: 0.85rem;
+  font-weight: 400;
+}
+.calendar-add-menu button:hover {
+  background: var(--bg-hover);
+}
+.agenda {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  max-width: 900px;
+}
+.agenda-day h3 {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 0 6px;
+  font-size: 0.85rem;
+  text-transform: capitalize;
+  color: var(--text-dim);
+  border-bottom: 1px solid var(--border);
+  padding-bottom: 4px;
+}
+.agenda-day h3 .calendar-add {
+  opacity: 1;
+}
+.agenda-day.today h3 {
+  color: var(--accent-text);
+}
+.agenda-day.overdue h3 {
+  color: var(--danger);
+}
+.agenda-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 2px 0;
+}
+.agenda-item .chip {
+  max-width: 520px;
+}
+.agenda-date {
+  font-size: 0.78rem;
+  color: var(--danger);
+  min-width: 90px;
+}
+
+/* Listas: ubicación y relaciones; selector con tipo */
+.tracker-context {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-sidebar);
+  font-size: 0.86rem;
+}
+.tracker-context-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 10px;
+}
+.tracker-context-label {
+  width: 18px;
+}
+.tracker-link-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  background: var(--bg-elev);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 0 4px 0 10px;
+}
+.picker-kind {
+  margin-left: auto;
+  font-size: 0.72rem;
+  color: var(--text-faint);
+  white-space: nowrap;
+}
+.cfg-sub {
+  padding-left: 30px;
+}
+.tracker-group-section {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 18px;
+}
+.tracker-group-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  font-size: 0.9rem;
+  color: var(--text-dim);
+}
+
+/* Visor de HTML adjunto (aislado) */
+.viewer-html {
+  background: #fff;
+}

@@ -456,3 +456,72 @@ test('seguimiento por MCP: listas con campos propios, tickets, filtros, bloqueos
   assert.equal(ideaDoc.outcomes.at(-1).type, 'issue');
   assert.equal(ideaDoc.outcomes.at(-1).label, 'TODO-2');
 });
+
+test('listas independientes, plantilla Issues, relaciones de lista y agenda por tipo de fecha', async () => {
+  const proyecto = await api('/api/pages', { title: 'Proyecto Beta' });
+  const canvas = await api('/api/pages', { kind: 'canvas', title: 'Mapa Beta' });
+  const reunion = await api('/api/pages', { title: 'Comité Beta', page_date: '2030-03-10' });
+
+  // Issues como plantilla; una lista sin página no está en el árbol
+  let r = await call('create_tracker', { title: 'Issues Beta', template: 'issues' });
+  assert.match(r.text, /prefijo ISS/);
+  assert.match(r.text, /Campos: Tipo, Prioridad, Responsable, Componente, Fecha límite/);
+  const issId = r.text.match(/id: ([A-Za-z0-9_-]+)/)[1];
+  r = await call('create_tracker', { title: 'Tareas Beta', template: 'todo', parent_id: proyecto.id });
+  const todoId = r.text.match(/id: ([A-Za-z0-9_-]+)/)[1];
+  const tree = await call('list_pages', {});
+  assert.doesNotMatch(tree.text, /Issues Beta/, 'la lista independiente no está en el árbol');
+  assert.match(tree.text, /Tareas Beta \(id: [^,]+, lista de seguimiento\)/, 'la lista con página sí');
+  assert.match((await call('list_trackers', {})).text, /Issues Beta — prefijo ISS/, 'pero ambas en list_trackers');
+
+  // tipos de fecha: plantilla (límite) y campo nuevo de inicio
+  r = await call('update_tracker', { tracker: 'ISS', add_fields: [{ name: 'Inicio', type: 'date', date_role: 'start' }, { name: 'Demo', type: 'date', date_role: 'event' }] });
+  assert.equal(r.isError, false, r.text);
+  const cfg = (await api(`/api/pages/${issId}/tracker`)).config;
+  assert.deepEqual(cfg.fields.filter((f) => f.type === 'date').map((f) => [f.name, f.date_role]), [['Fecha límite', 'deadline'], ['Inicio', 'start'], ['Demo', 'event']]);
+
+  await call('create_issue', { tracker: 'ISS', title: 'Login roto', fields: { Tipo: 'Bug', Prioridad: 'Crítica', 'Fecha límite': '2030-03-12', Inicio: '2030-03-09' } });
+  await call('create_issue', { tracker: 'ISS', title: 'Demo cliente', fields: { Demo: '2030-03-11' } });
+  await call('create_issue', { tracker: 'ISS', title: 'Bug viejo', fields: { 'Fecha límite': '2020-01-01' } });
+  await call('create_issue', { tracker: 'ISS', title: 'Cerrado', status: 'Cerrado', fields: { 'Fecha límite': '2030-03-12' } });
+
+  // calendario: fechas de tickets por tipo, vencidos y eventos
+  const cal = await api('/api/calendar?from=2030-03-01&to=2030-03-31&overdue=2030-03-01');
+  assert.ok(cal.dated.some((p) => p.id === reunion.id), 'evento (página con fecha)');
+  const roles = cal.issues.filter((i) => i.tracker_id === issId).map((i) => `${i.key}:${i.role}:${i.day}${i.overdue ? ':vencido' : ''}`).sort();
+  assert.deepEqual(roles, ['ISS-1:deadline:2030-03-12', 'ISS-1:start:2030-03-09', 'ISS-2:event:2030-03-11', 'ISS-3:deadline:2020-01-01:vencido', 'ISS-4:deadline:2030-03-12'].sort());
+  assert.ok(cal.trackers.some((t) => t.id === issId && t.has_dates));
+
+  // agenda (MCP): por tipo y lista, sin hechos, con vencidos
+  r = await call('agenda', { from: '2030-03-01', to: '2030-03-31', tracker: 'ISS' });
+  assert.match(r.text, /## ⚠ Vencido\n- 2020-01-01 · ISS-3 Bug viejo/);
+  assert.match(r.text, /## 2030-03-09\n- ▶ Empieza: ISS-1 Login roto — Inicio/);
+  assert.match(r.text, /## 2030-03-11\n- 📌 Evento: ISS-2 Demo cliente — Demo/);
+  assert.match(r.text, /⏰ Vence: ISS-1 Login roto — Fecha límite/);
+  assert.doesNotMatch(r.text, /ISS-4 Cerrado/, 'sin tickets hechos por defecto');
+  r = await call('agenda', { from: '2030-03-01', to: '2030-03-31', kinds: ['events'] });
+  assert.match(r.text, /📅 Evento: Comité Beta/);
+  assert.doesNotMatch(r.text, /ISS-/);
+
+  // relaciones de la lista entera con canvas, página, otra lista e idea
+  const idea = (await call('create_idea', { seed_text: 'Mejorar onboarding' })).text.match(/id: ([A-Za-z0-9_-]+)/)[1];
+  for (const [type, target] of [['documents', canvas.id], ['relates', todoId], ['origin', idea], ['relates', reunion.id]]) {
+    r = await call('link_issue', { tracker: 'ISS', type, target });
+    assert.equal(r.isError, false, r.text);
+  }
+  assert.match((await call('link_issue', { tracker: 'ISS', type: 'blocks', target: todoId })).text, /lista entera/);
+  const det = await api(`/api/pages/${issId}/tracker`);
+  assert.deepEqual(det.links.map((l) => `${l.type}:${l.target.kind}`).sort(), ['documents:canvas', 'origin:idea', 'relates:doc', 'relates:tracker'].sort());
+  const otra = await api(`/api/pages/${todoId}/tracker`);
+  assert.ok(otra.incoming.some((l) => l.source.id === issId), 'la otra lista ve la relación');
+  assert.ok((await api(`/api/pages/${canvas.id}/issues`)).linked.some((l) => l.issue.id === issId), 'el canvas ve la lista relacionada');
+  assert.ok((await api('/api/graph')).links.some((l) => l.source === issId && l.target === canvas.id), 'y el grafo');
+  r = await call('link_issue', { tracker: 'ISS', type: 'documents', target: canvas.id, remove: true });
+  assert.equal(r.isError, false, r.text);
+
+  // vincular y desvincular de una página (mover)
+  assert.equal((await call('move_page', { page_id: issId, new_parent_id: proyecto.id })).isError, false);
+  assert.match((await call('list_pages', {})).text, /Issues Beta/);
+  assert.equal((await call('move_page', { page_id: issId, new_parent_id: null })).isError, false);
+  assert.doesNotMatch((await call('list_pages', {})).text, /Issues Beta/);
+});

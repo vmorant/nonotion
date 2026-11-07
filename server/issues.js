@@ -30,6 +30,18 @@ export const FIELD_TYPE_LABELS = {
   url: 'Enlace',
 };
 export const COLORS = ['gray', 'blue', 'green', 'yellow', 'orange', 'red', 'purple', 'pink', 'teal'];
+// Qué significa una fecha (para el calendario y la agenda)
+export const DATE_ROLES = ['deadline', 'start', 'event', 'other'];
+export const DATE_ROLE_LABELS = { deadline: 'Fecha límite', start: 'Inicio', event: 'Evento', other: 'Otra fecha' };
+const fold0 = (s) => String(s ?? '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
+export function dateRole(field) {
+  if (DATE_ROLES.includes(field?.date_role)) return field.date_role;
+  const n = fold0(field?.name);
+  if (/limite|vence|venc|entrega|deadline|plazo/.test(n)) return 'deadline';
+  if (/inicio|empieza|comienzo|arranque|start/.test(n)) return 'start';
+  if (/evento|reunion|cita|sesion/.test(n)) return 'event';
+  return 'other';
+}
 export const LINK_TYPES = ['blocks', 'relates', 'documents', 'origin'];
 export const LINK_LABELS = { blocks: 'Bloquea a', relates: 'Relacionado con', documents: 'Documentado en', origin: 'Viene de' };
 export const LINK_INVERSE = { blocks: 'Bloqueado por', relates: 'Relacionado con', documents: 'Documenta', origin: 'Originó' };
@@ -59,7 +71,29 @@ export const TEMPLATES = {
         { id: rid(), name: 'Impacto', type: 'select', options: [opt('Alto', 'red'), opt('Medio', 'orange'), opt('Bajo', 'gray')] },
         { id: rid(), name: 'Área', type: 'select', options: [opt('Datos', 'blue'), opt('Infraestructura', 'purple'), opt('Negocio', 'green'), opt('Seguridad', 'red')] },
         { id: rid(), name: 'Responsable', type: 'person' },
-        { id: rid(), name: 'Fecha límite', type: 'date' },
+        { id: rid(), name: 'Fecha límite', type: 'date', date_role: 'deadline' },
+      ],
+    }),
+  },
+  issues: {
+    label: 'Issues (incidencias y mejoras)',
+    icon: '🐞',
+    prefix: 'ISS',
+    build: () => ({
+      statuses: [
+        st('Abierto', 'todo', 'blue'),
+        st('En curso', 'doing', 'yellow'),
+        st('En revisión', 'doing', 'purple'),
+        st('Bloqueado', 'blocked', 'red'),
+        st('Cerrado', 'done', 'green'),
+        st('Descartado', 'done', 'gray'),
+      ],
+      fields: [
+        { id: rid(), name: 'Tipo', type: 'select', options: [opt('Bug', 'red'), opt('Mejora', 'blue'), opt('Tarea', 'gray'), opt('Pregunta', 'purple')] },
+        { id: rid(), name: 'Prioridad', type: 'select', options: [opt('Crítica', 'red'), opt('Alta', 'orange'), opt('Media', 'yellow'), opt('Baja', 'gray')] },
+        { id: rid(), name: 'Responsable', type: 'person' },
+        { id: rid(), name: 'Componente', type: 'select', options: [] },
+        { id: rid(), name: 'Fecha límite', type: 'date', date_role: 'deadline' },
       ],
     }),
   },
@@ -72,7 +106,7 @@ export const TEMPLATES = {
       fields: [
         { id: rid(), name: 'Prioridad', type: 'select', options: [opt('Alta', 'red'), opt('Media', 'orange'), opt('Baja', 'gray')] },
         { id: rid(), name: 'Responsable', type: 'person' },
-        { id: rid(), name: 'Fecha', type: 'date' },
+        { id: rid(), name: 'Fecha', type: 'date', date_role: 'deadline' },
       ],
     }),
   },
@@ -204,6 +238,7 @@ export function normalizeConfig(input) {
         return { id, name: str(o?.name, 60) || 'Opción', color: validColor(o?.color) };
       });
     }
+    if (type === 'date') out.date_role = dateRole(f);
     if (f?.hidden) out.hidden = true;
     return out;
   });
@@ -338,6 +373,8 @@ export function resolveTarget(ref, ws) {
 }
 
 function addLink(issueId, type, targetRef, ws, by) {
+  const source = pageRow.get(issueId);
+  if (source?.kind === 'tracker' && type === 'blocks') throw new IssueError('"Bloquea a" se usa entre tickets, no con una lista entera');
   if (!LINK_TYPES.includes(type)) {
     throw new IssueError(`Tipo de relación "${type}" no válido (${LINK_TYPES.map((t) => `${t} = ${LINK_LABELS[t]}`).join(', ')})`);
   }
@@ -435,7 +472,21 @@ export function trackerDetail(trackerId) {
   const t = trackerConfig(trackerId);
   if (!t) return null;
   const rows = db.prepare(`${TICKET_SELECT} WHERE i.tracker_id = ? AND p.trashed_at IS NULL ORDER BY i.number DESC`).all(trackerId);
-  return { id: trackerId, prefix: t.prefix, config: t.config, issues: rows.map((r) => rowOf(r, t)) };
+  const links = db
+    .prepare('SELECT id, target_id, type FROM issue_links WHERE issue_id = ? ORDER BY id')
+    .all(trackerId)
+    .map((l) => ({ ...l, target: linkInfo(pageRow.get(l.target_id)) }))
+    .filter((l) => l.target && !l.target.trashed);
+  const incoming = db
+    .prepare(
+      `SELECT l.id, l.issue_id, l.type FROM issue_links l JOIN pages p ON p.id = l.issue_id
+       WHERE l.target_id = ? AND p.kind = 'tracker' ORDER BY l.id`
+    )
+    .all(trackerId)
+    .map((l) => ({ ...l, source: linkInfo(pageRow.get(l.issue_id)) }))
+    .filter((l) => l.source && !l.source.trashed);
+  const tp = pageRow.get(trackerId);
+  return { id: trackerId, prefix: t.prefix, config: t.config, parent_id: tp?.parent_id || null, links, incoming, issues: rows.map((r) => rowOf(r, t)) };
 }
 
 export function listTrackers(ws) {
@@ -577,6 +628,58 @@ export function issuesForPage(pageId, ws) {
     }
   }
   return { linked, mentioned };
+}
+
+// ---------- Calendario y agenda ----------
+
+// Fechas de los tickets entre from y to (AAAA-MM-DD), con su tipo (límite,
+// inicio, evento, otra). Con overdue = true, además las fechas límite
+// vencidas de tickets abiertos anteriores a from.
+export function calendarIssueDates(ws, from, to, { overdueBefore = null } = {}) {
+  const trackers = db
+    .prepare('SELECT t.page_id, t.prefix, t.config, p.title, p.icon FROM trackers t JOIN pages p ON p.id = t.page_id WHERE t.workspace_id = ? AND p.trashed_at IS NULL')
+    .all(ws)
+    .map((t) => ({ ...t, config: JSON.parse(t.config) }));
+  const out = [];
+  for (const t of trackers) {
+    const dateFields = t.config.fields.filter((f) => f.type === 'date');
+    if (!dateFields.length) continue;
+    const rows = db
+      .prepare(`SELECT i.page_id, i.number, i.status, i.vals, p.title, p.icon FROM issues i JOIN pages p ON p.id = i.page_id WHERE i.tracker_id = ? AND p.trashed_at IS NULL`)
+      .all(t.page_id);
+    for (const r of rows) {
+      const vals = JSON.parse(r.vals || '{}');
+      const s = statusOf(t.config, r.status);
+      for (const f of dateFields) {
+        const day = vals[f.id];
+        if (typeof day !== 'string') continue;
+        const role = dateRole(f);
+        const inRange = day >= from && day <= to;
+        const overdue = overdueBefore && role === 'deadline' && OPEN_CATEGORIES.has(s.category) && day < overdueBefore;
+        if (!inRange && !overdue) continue;
+        out.push({
+          id: r.page_id,
+          key: `${t.prefix}-${r.number}`,
+          title: r.title,
+          icon: r.icon,
+          day,
+          role,
+          field: f.name,
+          tracker_id: t.page_id,
+          tracker_title: t.title,
+          tracker_icon: t.icon,
+          status_name: s.name,
+          category: s.category,
+          color: s.color,
+          overdue: Boolean(role === 'deadline' && OPEN_CATEGORIES.has(s.category) && day < (overdueBefore || new Date().toISOString().slice(0, 10))),
+        });
+      }
+    }
+  }
+  return {
+    items: out.sort((a, b) => a.day.localeCompare(b.day)),
+    trackers: trackers.map((t) => ({ id: t.page_id, title: t.title, icon: t.icon, prefix: t.prefix, has_dates: t.config.fields.some((f) => f.type === 'date') })),
+  };
 }
 
 // ---------- Escrituras ----------
@@ -762,7 +865,7 @@ export function updateIssue(req, pageId, b) {
 }
 
 export function linkIssue(req, pageId, type, target) {
-  if (!issueRow.get(pageId)) throw new IssueError('Esta página no es un ticket de seguimiento', 404);
+  if (!issueRow.get(pageId) && !trackerRow.get(pageId)) throw new IssueError('Solo los tickets y las listas de seguimiento tienen relaciones', 404);
   const by = actorOf(req);
   const r = db.transaction(() => addLink(pageId, type, target, req.ws, by))();
   db.prepare(`UPDATE pages SET updated_at = datetime('now') WHERE id = ?`).run(pageId);
@@ -933,7 +1036,7 @@ export function mountIssues(app, { notifyTree, notifyPage, onIdeaOutcome }) {
       notifyPage(req, req.params.id);
       notifyPage(req, r.target.id);
       notifyTree(req);
-      return issueDetail(req.params.id);
+      return issueDetail(req.params.id) || trackerDetail(req.params.id);
     })
   );
   app.delete('/api/pages/:id/issue/links/:linkId', (req, res) =>

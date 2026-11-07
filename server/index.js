@@ -46,6 +46,7 @@ import {
   trackerConfigMarkdown,
   trackerTableMarkdown,
   valueLabel,
+  calendarIssueDates,
 } from './issues.js';
 
 // Páginas a las que apunta un contenido, sea documento, canvas o idea
@@ -339,7 +340,7 @@ app.get('/api/graph', (req, res) => {
   }
   // Relaciones de seguimiento (bloquea, documentado en…) con su tipo
   for (const l of db
-    .prepare(`SELECT l.issue_id, l.target_id, l.type FROM issue_links l JOIN issues i ON i.page_id = l.issue_id WHERE i.workspace_id = ?`)
+    .prepare(`SELECT l.issue_id, l.target_id, l.type FROM issue_links l JOIN pages p ON p.id = l.issue_id WHERE p.workspace_id = ?`)
     .all(req.ws)) {
     if (alive.has(l.issue_id) && alive.has(l.target_id)) links.push({ source: l.issue_id, target: l.target_id, rel: l.type });
   }
@@ -807,7 +808,10 @@ app.get('/api/calendar', (req, res) => {
          AND a.day != date(p.created_at, 'localtime')`
     )
     .all(req.ws, from, to);
-  res.json({ dated, created, edited });
+  // Fechas de los tickets (límite, inicio, evento, otra) y, si se pide, lo vencido
+  const overdueBefore = req.query.overdue ? validDate(req.query.overdue) : null;
+  const { items: issues, trackers } = calendarIssueDates(req.ws, from, to, { overdueBefore });
+  res.json({ dated, created, edited, issues, trackers });
 });
 
 // ---------- Captura desde el PC de IA ----------
@@ -1532,6 +1536,29 @@ app.get('/files/:id/page/:page', async (req, res) => {
   } catch (e) {
     return res.status(500).json({ error: `No se pudo renderizar la página ${page}: ${e.message}` });
   }
+});
+
+// Vista renderizada de un HTML adjunto (informes, gráficos que genera Claude).
+// Se sirve con CSP "sandbox" SIN allow-same-origin: el documento corre en un
+// origen opaco, así que sus scripts funcionan (gráficos, CDN) pero no pueden
+// leer la sesión ni llamar a la API de NoNotion. Vale igual dentro del visor
+// (iframe) que abierto en una pestaña nueva.
+const HTML_VIEW_CSP =
+  "sandbox allow-scripts allow-popups allow-popups-to-escape-sandbox allow-forms allow-modals allow-downloads; default-src * data: blob: 'unsafe-inline' 'unsafe-eval'";
+const isHtmlFile = (f) => /^(text\/html|application\/xhtml\+xml)\b/i.test(f.mime || '') || /\.x?html?$/i.test(f.name || '');
+app.get('/files/:id/view', (req, res, next) => {
+  const f = db.prepare('SELECT * FROM files WHERE id = ? AND deleted_at IS NULL').get(req.params.id);
+  if (!f || !isHtmlFile(f)) return next(); // un archivo llamado "view" que no es HTML: ruta normal
+  const filePath = path.join(FILES_DIR, f.id);
+  if (!fs.existsSync(filePath)) return res.status(404).send('No encontrado');
+  res.sendFile(filePath, {
+    headers: {
+      'Content-Type': 'text/html; charset=utf-8',
+      'Content-Security-Policy': HTML_VIEW_CSP,
+      'Content-Disposition': `inline; filename*=UTF-8''${encodeURIComponent(f.name)}`,
+      'Cache-Control': 'private, no-cache',
+    },
+  });
 });
 
 app.get('/files/:id/:name?', (req, res) => {
