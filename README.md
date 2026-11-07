@@ -64,6 +64,13 @@ npm run dev                      # terminal 1: API en :3000
 cd client && npm run dev         # terminal 2: Vite en :5173 con proxy a la API
 ```
 
+## Ramas y cambios
+
+- **`main`** es la rama estable: lo que hay en `main` es lo que corre en el servidor.
+- Cada cambio se hace en una rama propia (`feature/…`, `fix/…`) y entra en `main` mediante un **pull request** que pase `npm test`.
+- Al fusionar: se despliega desde `main` y se borra la rama del cambio.
+- Antes de desplegar algo que toque la base de datos: snapshot del contenedor (o `backups/pre-update/`, que `install.sh` crea solo).
+
 ## Instalación en el LXC de Proxmox
 
 Recomendado: LXC Debian 12, 2 vCPU, **2 GB de RAM** (LibreOffice convierte los documentos de Office para el visor; con 1 GB funciona, pero los documentos grandes van justos) y el disco que quieras para tus archivos.
@@ -71,7 +78,7 @@ Recomendado: LXC Debian 12, 2 vCPU, **2 GB de RAM** (LibreOffice convierte los d
 ```bash
 # Dentro del contenedor, como root:
 apt-get update && apt-get install -y git
-git clone https://github.com/vmorant/nonotion.git /root/nonotion
+git clone -b main https://github.com/vmorant/nonotion.git /root/nonotion
 cd /root/nonotion
 bash deploy/install.sh
 ```
@@ -86,8 +93,10 @@ journalctl -u nonotion -f
 Para actualizar más adelante:
 
 ```bash
-cd /root/nonotion && git pull && bash deploy/install.sh
+cd /root/nonotion && git checkout main && git pull --ff-only && bash deploy/install.sh
 ```
+
+El servidor se despliega siempre desde `main` (ver [Ramas y cambios](#ramas-y-cambios)).
 
 (Los datos en `/var/lib/nonotion` nunca se tocan; antes de cada actualización se guarda una copia de la base de datos en `backups/pre-update/`.)
 
