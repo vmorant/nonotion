@@ -11,8 +11,9 @@ import db, { DATA_DIR, FILES_DIR, ftsUpsert, ftsDelete, extractText, logActivity
 import { docToMarkdown, markdownToDoc, appendMarkdown, replaceInDoc, EditError } from './markdown.js';
 import { mountMcp, getOrCreateToken } from './mcp.js';
 import { setupAuth, purgeExpiredSessions } from './auth.js';
-import { mountTags, tagsOf, setPageTags, copyTags, pagesWithTags, TAGS_COLUMN, splitTags } from './tags.js';
+import { mountTags, tagsOf, setPageTags, copyTags, pagesWithTags, TAGS_COLUMN, splitTags, lowercaseTags } from './tags.js';
 import { workspaceGuard, mountWorkspaces, pageInWs, adoptLegacyToken, loginOf } from './workspaces.js';
+import { movePages, MoveError, describeMove } from './pageMove.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PORT = process.env.PORT || 3000;
@@ -26,6 +27,9 @@ process.on('unhandledRejection', (e) => console.error('Error no capturado:', e))
 const app = express();
 app.disable('x-powered-by');
 app.use(express.json({ limit: '100mb' }));
+
+// Etiquetas siempre en minúsculas (migra y fusiona las antiguas; idempotente)
+lowercaseTags();
 
 // Login con GitHub + tokens de API. Va antes que cualquier ruta.
 adoptLegacyToken(getOrCreateToken());
@@ -77,9 +81,6 @@ function subtreeIds(rootId) {
     .map((r) => r.id);
 }
 
-function isDescendant(candidateId, ancestorId) {
-  return subtreeIds(ancestorId).includes(candidateId);
-}
 
 function permanentDelete(pageId) {
   const subtree = subtreeIds(pageId);
@@ -232,17 +233,16 @@ app.put('/api/pages/:id', (req, res) => {
   if (typeof b.content_text === 'string') fields.content_text = b.content_text;
   if (typeof b.position === 'number') fields.position = b.position;
   if (b.page_date !== undefined) fields.page_date = validDate(b.page_date);
+  // Cambiar de padre pasa por la misma función que el resto de movimientos
+  let moved = false;
   if (b.parent_id !== undefined) {
-    if (b.parent_id !== null) {
-      if (b.parent_id === page.id || isDescendant(b.parent_id, page.id)) {
-        return res.status(400).json({ error: 'Movimiento inválido: crearía un ciclo' });
-      }
-      if (!pageInWs(b.parent_id, page.workspace_id)) return res.status(400).json({ error: 'Padre inexistente' });
-    }
-    fields.parent_id = b.parent_id;
+    if (!sendMove(req, res, [{ page_id: page.id, parent_id: b.parent_id }])) return;
+    moved = true;
   }
 
-  if (Object.keys(fields).length === 0) return res.json(page);
+  if (Object.keys(fields).length === 0) {
+    return res.json(moved ? db.prepare('SELECT * FROM pages WHERE id = ?').get(page.id) : page);
+  }
 
   // Nada se pierde al sobrescribir el contenido:
   //  - si el cliente partía de una revisión antigua (otro dispositivo o Claude
@@ -271,7 +271,7 @@ app.put('/api/pages/:id', (req, res) => {
     logActivity(page.id);
   }
   notifyPage(req, page.id);
-  if (fields.title !== undefined || fields.icon !== undefined || fields.parent_id !== undefined || fields.page_date !== undefined) {
+  if (fields.title !== undefined || fields.icon !== undefined || fields.page_date !== undefined) {
     notifyTree(req);
   }
   res.json({ ...updated, conflict });
@@ -300,38 +300,43 @@ app.post('/api/pages/:id/prefs', (req, res) => {
   });
 });
 
-// Mover en el árbol: nuevo padre + posición exacta entre hermanos
-app.post('/api/pages/:id/move', (req, res) => {
-  const page = db.prepare('SELECT * FROM pages WHERE id = ?').get(req.params.id);
-  if (!page) return res.status(404).json({ error: 'Página no encontrada' });
-  const { parent_id = null, index = 0 } = req.body || {};
-  if (parent_id !== null) {
-    if (parent_id === page.id || isDescendant(parent_id, page.id)) {
-      return res.status(400).json({ error: 'Movimiento inválido: crearía un ciclo' });
+// Mover en el árbol (interfaz y MCP comparten pageMove.js). Cuerpo:
+// { parent_id (null = raíz), index? | before_id? | after_id? }; sin posición, al final
+const moveFromBody = (pageId, b = {}) => ({
+  page_id: pageId,
+  parent_id: Object.prototype.hasOwnProperty.call(b, 'parent_id') ? b.parent_id : undefined,
+  index: b.index,
+  before_id: b.before_id,
+  after_id: b.after_id,
+});
+
+function sendMove(req, res, moves) {
+  try {
+    const results = movePages(req.ws, moves);
+    if (results.some((r) => !r.noop)) notifyTree(req);
+    return results;
+  } catch (e) {
+    if (e instanceof MoveError) res.status(e.status).json({ error: e.message });
+    else {
+      console.error('Error al mover páginas:', e);
+      res.status(500).json({ error: 'Error interno al mover' });
     }
-    if (!pageInWs(parent_id, page.workspace_id)) {
-      return res.status(400).json({ error: 'Padre inexistente' });
-    }
+    return null;
   }
-  db.transaction(() => {
-    const siblings = db
-      .prepare(
-        `SELECT id FROM pages WHERE parent_id IS ? AND workspace_id = ? AND trashed_at IS NULL AND id != ?
-         ORDER BY position, created_at`
-      )
-      .all(parent_id, page.workspace_id, page.id)
-      .map((r) => r.id);
-    const at = Math.max(0, Math.min(index, siblings.length));
-    siblings.splice(at, 0, page.id);
-    const setPos = db.prepare('UPDATE pages SET position = ? WHERE id = ?');
-    siblings.forEach((id, i) => setPos.run(i, id));
-    db.prepare(`UPDATE pages SET parent_id = ?, updated_at = datetime('now') WHERE id = ?`).run(
-      parent_id,
-      page.id
-    );
-  })();
-  notifyTree(req);
-  res.json({ ok: true });
+}
+
+app.post('/api/pages/:id/move', (req, res) => {
+  const results = sendMove(req, res, [moveFromBody(req.params.id, req.body)]);
+  if (results) res.json({ ok: true, ...results[0], message: describeMove(results[0]) });
+});
+
+// Varios movimientos atómicos: si uno no es válido, no se aplica ninguno
+app.post('/api/move-pages', (req, res) => {
+  const list = Array.isArray(req.body?.moves) ? req.body.moves : null;
+  if (!list || !list.length) return res.status(400).json({ error: 'Falta la lista "moves"' });
+  if (list.length > 500) return res.status(400).json({ error: 'Máximo 500 movimientos por llamada' });
+  const results = sendMove(req, res, list.map((m) => moveFromBody(m?.page_id, m)));
+  if (results) res.json({ ok: true, results: results.map((r) => ({ ...r, message: describeMove(r) })) });
 });
 
 // Duplicar página (subárbol completo, con copia física de archivos)

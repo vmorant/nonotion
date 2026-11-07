@@ -1,8 +1,9 @@
 import { useState } from 'react';
 import { NavLink, useNavigate } from 'react-router-dom';
 import { api } from '../api.js';
+import MoveDialog from './MoveDialog.jsx';
 
-function TreeItem({ page, index, childrenMap, depth, onCreate, onDelete, onDuplicate, onMove, onFavorite }) {
+function TreeItem({ page, index, childrenMap, depth, onCreate, onDelete, onDuplicate, onMove, onFavorite, onMoveTo }) {
   const [open, setOpen] = useState(depth < 1);
   const [menuOpen, setMenuOpen] = useState(false);
   const [dropZone, setDropZone] = useState(null); // 'before' | 'inside' | 'after'
@@ -116,6 +117,14 @@ function TreeItem({ page, index, childrenMap, depth, onCreate, onDelete, onDupli
           <button
             onClick={() => {
               setMenuOpen(false);
+              onMoveTo(page);
+            }}
+          >
+            Mover a…
+          </button>
+          <button
+            onClick={() => {
+              setMenuOpen(false);
               onFavorite(page.id, !page.favorite_at);
             }}
           >
@@ -145,6 +154,7 @@ function TreeItem({ page, index, childrenMap, depth, onCreate, onDelete, onDupli
             onDuplicate={onDuplicate}
             onMove={onMove}
             onFavorite={onFavorite}
+            onMoveTo={onMoveTo}
           />
         ))}
     </div>
@@ -271,6 +281,7 @@ export default function Sidebar({
   onCollapse,
   onOpenTrash,
 }) {
+  const [moving, setMoving] = useState(null); // página con "Mover a…" abierto
   const byId = new Map(pages.map((p) => [p.id, p]));
   const favorites = pages.filter((p) => p.favorite_at).sort((a, b) => a.favorite_at.localeCompare(b.favorite_at));
   const recentPages = recent.map((id) => byId.get(id)).filter(Boolean).slice(0, RECENT_SHOWN);
@@ -285,6 +296,7 @@ export default function Sidebar({
 
   return (
     <aside className="sidebar">
+      {moving && <MoveDialog page={moving} pages={pages} onMove={onMove} onClose={() => setMoving(null)} />}
       <div className="sidebar-header">
         <WorkspaceSwitcher
           workspaces={workspaces}
@@ -335,6 +347,7 @@ export default function Sidebar({
               onDuplicate={onDuplicate}
               onMove={onMove}
               onFavorite={onFavorite}
+              onMoveTo={setMoving}
             />
           ))}
         </div>

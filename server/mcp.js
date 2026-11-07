@@ -10,6 +10,7 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import db, { DATA_DIR } from './db.js';
 import { lookupToken } from './workspaces.js';
+import { normalizeTag } from './tags.js';
 import { markdownToDoc } from './markdown.js';
 
 const TEXT_LIMIT = 200 * 1024; // 200 KB para adjuntos de texto
@@ -207,7 +208,7 @@ export function mountMcp(app, port) {
       {
         title: 'Crear página',
         description:
-          'Crea una página nueva en NoNotion con contenido Markdown. Úsala SOLO cuando el usuario pida explícitamente una página nueva; para añadir contenido a una conversación en curso usa append_to_page. Sin parent_id la página va a la página Inbox.',
+          'Crea una página nueva en NoNotion con contenido Markdown. Úsala SOLO cuando el usuario pida explícitamente una página nueva; para añadir contenido a una conversación en curso usa append_to_page. Antes de crear, usa list_pages/search_pages para elegir el padre temático adecuado; usa Inbox solo si no encaja en ninguna sección. Sin parent_id la página va a la página Inbox.',
         inputSchema: {
           markdown: z.string().describe('Contenido en Markdown'),
           title: z.string().optional().describe('Título (si falta, se deriva del primer encabezado)'),
@@ -423,6 +424,87 @@ export function mountMcp(app, port) {
       }
     );
 
+    // move_page / move_pages: mismo endpoint atómico que usa la interfaz
+    const positionSchema = {
+      position: z
+        .number()
+        .int()
+        .min(0)
+        .optional()
+        .describe('Índice (0 = primera) entre las hermanas del destino. Sin posición: al final'),
+      before_id: z.string().optional().describe('Colocarla justo antes de esta página hermana del destino'),
+      after_id: z.string().optional().describe('Colocarla justo después de esta página hermana del destino'),
+    };
+    const toMove = (m) => ({
+      page_id: m.page_id,
+      parent_id: m.new_parent_id === undefined ? undefined : m.new_parent_id,
+      index: m.position,
+      before_id: m.before_id,
+      after_id: m.after_id,
+    });
+
+    server.registerTool(
+      'move_page',
+      {
+        title: 'Mover página',
+        description:
+          'Mueve una página (y sus subpáginas) bajo otro padre o a la raíz. Úsala para reclasificar; no cambia contenido, etiquetas ni ids.',
+        inputSchema: {
+          page_id: z.string().describe('Id de la página a mover'),
+          new_parent_id: z
+            .string()
+            .nullable()
+            .describe('Id del nuevo padre, o null para moverla a la raíz del espacio'),
+          ...positionSchema,
+        },
+      },
+      async (args) => {
+        try {
+          const r = await (
+            await api('/api/move-pages', { method: 'POST', body: JSON.stringify({ moves: [toMove(args)] }) })
+          ).json();
+          return ok(r.results[0].message);
+        } catch (e) {
+          return fail(e);
+        }
+      }
+    );
+
+    server.registerTool(
+      'move_pages',
+      {
+        title: 'Mover varias páginas',
+        description:
+          'Mueve varias páginas de una vez (cada una con sus subpáginas), de forma atómica: si un movimiento no es válido, no se aplica ninguno. Se aplican en orden. Úsala para reorganizaciones grandes; no cambia contenido, etiquetas ni ids.',
+        inputSchema: {
+          moves: z
+            .array(
+              z.object({
+                page_id: z.string().describe('Id de la página a mover'),
+                new_parent_id: z.string().nullable().describe('Id del nuevo padre, o null para la raíz del espacio'),
+                ...positionSchema,
+              })
+            )
+            .min(1)
+            .max(200)
+            .describe('Movimientos a aplicar, en orden'),
+        },
+      },
+      async ({ moves }) => {
+        try {
+          const r = await (
+            await api('/api/move-pages', { method: 'POST', body: JSON.stringify({ moves: moves.map(toMove) }) })
+          ).json();
+          const changed = r.results.filter((x) => !x.noop).length;
+          return ok(
+            `${changed} de ${r.results.length} página(s) movida(s):\n` + r.results.map((x) => `- ${x.message}`).join('\n')
+          );
+        } catch (e) {
+          return fail(e);
+        }
+      }
+    );
+
     server.registerTool(
       'list_tags',
       {
@@ -445,7 +527,8 @@ export function mountMcp(app, port) {
       'tag_page',
       {
         title: 'Etiquetar página',
-        description: 'Añade y/o quita etiquetas de una página (no cambia su contenido). Úsala solo cuando el usuario pida clasificar o etiquetar.',
+        description:
+          'Añade y/o quita etiquetas de una página (no cambia su contenido). Las etiquetas no distinguen mayúsculas y se guardan en minúsculas ("Pegasus" = "pegasus"). Primero se quitan las de remove y luego se añaden las de add. Úsala solo cuando el usuario pida clasificar o etiquetar.',
         inputSchema: {
           page_id: z.string().describe('Id de la página'),
           add: z.array(z.string()).optional().describe('Etiquetas a añadir'),
@@ -455,8 +538,8 @@ export function mountMcp(app, port) {
       async ({ page_id, add = [], remove = [] }) => {
         try {
           const page = await (await api(`/api/pages/${page_id}`)).json();
-          const rm = new Set(remove.map((t) => t.replace(/^#/, '').trim().toLowerCase()));
-          const next = [...(page.tags || []).filter((t) => !rm.has(t.toLowerCase())), ...add];
+          const rm = new Set(remove.map(normalizeTag).filter(Boolean));
+          const next = [...(page.tags || []).filter((t) => !rm.has(normalizeTag(t))), ...add];
           const r = await (await api(`/api/pages/${page_id}/tags`, { method: 'PUT', body: JSON.stringify({ tags: next }) })).json();
           return ok(`Etiquetas de "${page.title || 'Sin título'}": ${r.tags.length ? r.tags.map((t) => '#' + t).join(' ') : '(ninguna)'}`);
         } catch (e) {

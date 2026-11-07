@@ -197,13 +197,16 @@ export default function App() {
     await refreshTree();
   };
 
+  // Arrastrar en el árbol y "Mover a…": devuelve el error (o null) para mostrarlo
   const movePage = async (id, parentId, index) => {
+    let error = null;
     try {
       await api.movePage(id, parentId, index);
-    } catch {
-      // movimiento inválido (p. ej. un padre dentro de su hijo): se ignora
+    } catch (e) {
+      error = e.message; // p. ej. soltar un padre dentro de su hijo: el árbol no cambia
     }
     await refreshTree();
+    return error;
   };
 
   return (
