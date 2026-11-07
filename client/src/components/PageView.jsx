@@ -6,7 +6,9 @@ import Attachments from './Attachments.jsx';
 import EmojiPicker from './EmojiPicker.jsx';
 import HistoryModal from './HistoryModal.jsx';
 import PageOutline from './PageOutline.jsx';
-import { Star, MoveHorizontal, History, Download, Share2, FilePlus2, Copy, Trash2 } from 'lucide-react';
+import { Star, MoveHorizontal, History, Download, Share2, FilePlus2, Copy, Trash2, Waypoints } from 'lucide-react';
+import CanvasView from './canvas/CanvasView.jsx';
+import LocalGraphPanel from './graph/LocalGraphPanel.jsx';
 
 const ICON = { size: 16, strokeWidth: 1.8 };
 import { TagEditor } from './Tags.jsx';
@@ -83,6 +85,21 @@ export default function PageView({
   const [prefsOverride, setPrefsOverride] = useState({}); // cambio local hasta que llegue el árbol
   const [tagsOverride, setTagsOverride] = useState(null);
   const [backlinks, setBacklinks] = useState([]);
+  const [localGraph, setLocalGraph] = useState(() => {
+    try {
+      return localStorage.getItem('nn:localgraph') === 'on';
+    } catch {
+      return false;
+    }
+  });
+  const toggleLocalGraph = () => {
+    setLocalGraph((v) => {
+      try {
+        localStorage.setItem('nn:localgraph', v ? 'off' : 'on');
+      } catch {}
+      return !v;
+    });
+  };
   const editorRef = useRef(null);
   // en un ref: cambiar de espacio no debe recargar la página abierta
   const wsSeenRef = useRef(onWorkspaceSeen);
@@ -314,6 +331,7 @@ export default function PageView({
   if (!page) return <div className="page-loading">Cargando…</div>;
 
   const crumbs = breadcrumb(pages, id);
+  const isCanvas = page.kind === 'canvas';
   const meta = pages.find((p) => p.id === id) || page;
   const fullWidth = prefsOverride.full_width ?? !!meta.full_width;
   const favorite = prefsOverride.favorite ?? !!meta.favorite_at;
@@ -468,18 +486,29 @@ export default function PageView({
             <Star {...ICON} fill={favorite ? 'currentColor' : 'none'} />
           </button>
           <button
-            className={'btn' + (fullWidth ? ' active' : '')}
-            onClick={() => setPref('full_width', !fullWidth)}
-            title={fullWidth ? 'Volver al ancho normal' : 'Usar todo el ancho de la pantalla'}
+            className={'btn' + (localGraph ? ' active' : '')}
+            onClick={toggleLocalGraph}
+            title="Grafo local: páginas conectadas con esta"
           >
-            <MoveHorizontal {...ICON} />
+            <Waypoints {...ICON} />
           </button>
+          {!isCanvas && (
+            <button
+              className={'btn' + (fullWidth ? ' active' : '')}
+              onClick={() => setPref('full_width', !fullWidth)}
+              title={fullWidth ? 'Volver al ancho normal' : 'Usar todo el ancho de la pantalla'}
+            >
+              <MoveHorizontal {...ICON} />
+            </button>
+          )}
           <button className="btn" onClick={() => setHistoryOpen(true)} title="Historial de versiones">
             <History {...ICON} />
           </button>
-          <button className="btn" onClick={exportMarkdown} title="Exportar como Markdown">
-            <Download {...ICON} /> MD
-          </button>
+          {!isCanvas && (
+            <button className="btn" onClick={exportMarkdown} title="Exportar como Markdown">
+              <Download {...ICON} /> MD
+            </button>
+          )}
           <div className="share-wrap">
             <button className={'btn' + (shareToken ? ' shared' : '')} onClick={() => setShareOpen((v) => !v)}>
               <Share2 {...ICON} /> Compartir
@@ -519,7 +548,7 @@ export default function PageView({
       </div>
 
       <div className="page-columns">
-      <div className={'page-body' + (fullWidth ? ' full' : '')}>
+      <div className={'page-body' + (fullWidth || isCanvas ? ' full' : '') + (isCanvas ? ' is-canvas' : '')}>
         <div className="page-head">
           <button className="page-icon" onClick={() => setEmojiOpen((v) => !v)} title="Cambiar icono">
             {page.icon || '📄'}
@@ -547,6 +576,17 @@ export default function PageView({
 
         <TagEditor tags={pageTags} allTags={allTags} onChange={changeTags} />
 
+        {isCanvas ? (
+          <CanvasView
+            key={`${id}:${reloadKey}`}
+            pageId={id}
+            parentId={page.parent_id}
+            pages={pages}
+            initialContent={page.content}
+            onChange={(doc) => queueSave({ content: doc })}
+            onFocusChange={(f) => (focusedRef.current = f)}
+          />
+        ) : (
         <Editor
           key={`${id}:${reloadKey}`}
           pageId={id}
@@ -560,10 +600,11 @@ export default function PageView({
           onFocusChange={(f) => (focusedRef.current = f)}
           onFileUploaded={(f) => setFiles((prev) => [...prev, f])}
         />
+        )}
 
-        <Attachments pageId={id} files={files} onChange={setFiles} />
+        {!isCanvas && <Attachments pageId={id} files={files} onChange={setFiles} />}
 
-        {backlinks.length > 0 && (
+        {!isCanvas && backlinks.length > 0 && (
           <section className="backlinks">
             <div className="backlinks-title">↩ Enlazada desde</div>
             {backlinks.map((b) => (
@@ -574,8 +615,10 @@ export default function PageView({
           </section>
         )}
       </div>
-      <PageOutline editor={editor} />
+      {!isCanvas && <PageOutline editor={editor} />}
       </div>
+
+      {localGraph && <LocalGraphPanel pageId={id} pages={pages} onClose={toggleLocalGraph} />}
 
       {historyOpen && <HistoryModal pageId={id} onClose={() => setHistoryOpen(false)} onRestored={onVersionRestored} />}
     </div>

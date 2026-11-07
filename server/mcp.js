@@ -163,7 +163,7 @@ export function mountMcp(app, port) {
           const walk = (parentId, depth) => {
             for (const p of children.get(parentId) || []) {
               lines.push(
-                `${'  '.repeat(depth)}- ${p.icon || '📄'} ${p.title || 'Sin título'} (id: ${p.id}${p.page_date ? `, fecha: ${p.page_date}` : ''})${p.tags?.length ? ` [${p.tags.map((t) => '#' + t).join(' ')}]` : ''}`
+                `${'  '.repeat(depth)}- ${p.icon || '📄'} ${p.title || 'Sin título'} (id: ${p.id}${p.kind === 'canvas' ? ', canvas' : ''}${p.page_date ? `, fecha: ${p.page_date}` : ''})${p.tags?.length ? ` [${p.tags.map((t) => '#' + t).join(' ')}]` : ''}`
               );
               walk(p.id, depth + 1);
             }
@@ -181,7 +181,7 @@ export function mountMcp(app, port) {
       {
         title: 'Leer página',
         description:
-          'Lee una página de NoNotion: devuelve su contenido en Markdown y la lista de archivos adjuntos (con file_id para read_attachment).',
+          'Lee una página de NoNotion: devuelve su contenido en Markdown y la lista de archivos adjuntos (con file_id para read_attachment). Si la página es un canvas, devuelve un resumen de tarjetas y conexiones y su JSON Canvas (para editarlo con update_canvas).',
         inputSchema: { page_id: z.string().describe('Id de la página') },
       },
       async ({ page_id }) => {
@@ -190,7 +190,9 @@ export function mountMcp(app, port) {
           let out = `# ${p.icon ? p.icon + ' ' : ''}${p.title || 'Sin título'}\n`;
           out += `(id: ${p.id}${p.page_date ? ` · fecha: ${p.page_date}` : ''} · actualizada: ${p.updated_at}${p.trashed ? ' · EN PAPELERA' : ''})\n`;
           out += p.tags?.length ? `Etiquetas: ${p.tags.map((t) => '#' + t).join(' ')}\n\n` : '\n';
+          if (p.kind === 'canvas') out += '(Esta página es un CANVAS: edítala con update_canvas, no con append/edit/update_page)\n\n';
           out += p.markdown || '(página vacía)';
+          if (p.kind === 'canvas') out += `\n\n---\nJSON Canvas:\n\`\`\`json\n${JSON.stringify(p.canvas)}\n\`\`\``;
           if (p.files?.length) {
             out +=
               '\n\n---\nAdjuntos:\n' +
@@ -499,6 +501,69 @@ export function mountMcp(app, port) {
           return ok(
             `${changed} de ${r.results.length} página(s) movida(s):\n` + r.results.map((x) => `- ${x.message}`).join('\n')
           );
+        } catch (e) {
+          return fail(e);
+        }
+      }
+    );
+
+    // Canvas (JSON Canvas 1.0, como Obsidian)
+    const canvasSchema = {
+      nodes: z
+        .array(z.object({}).passthrough())
+        .describe(
+          'Tarjetas. Comunes: id, type ("text"|"file"|"link"|"group"), x, y, width, height (px), color opcional ("1" rojo … "6" morado o "#rrggbb"). text: { text } en Markdown; file: { file } = "/p/<page_id>" para una página de NoNotion o "/files/<file_id>/<nombre>" para un adjunto; link: { url }; group: { label }. Orden = de abajo arriba.'
+        ),
+      edges: z
+        .array(z.object({}).passthrough())
+        .optional()
+        .describe(
+          'Conexiones: id, fromNode, toNode (ids de tarjetas), fromSide/toSide ("top"|"right"|"bottom"|"left"), fromEnd/toEnd ("none"|"arrow"; por defecto toEnd = arrow), color y label opcionales.'
+        ),
+    };
+
+    server.registerTool(
+      'create_canvas',
+      {
+        title: 'Crear canvas',
+        description:
+          'Crea un canvas (lienzo visual como el de Obsidian, formato JSON Canvas) con tarjetas y conexiones: mapas mentales, diagramas, tableros. Úsalo solo cuando el usuario lo pida. Coloca las tarjetas sin solaparse (p. ej. 300 px de ancho y 40 px de separación).',
+        inputSchema: {
+          title: z.string().describe('Título del canvas'),
+          parent_id: z.string().optional().describe('Id de la página padre (elige el padre temático; sin él va a la raíz)'),
+          icon: z.string().optional().describe('Emoji como icono'),
+          ...canvasSchema,
+        },
+      },
+      async ({ title, parent_id, icon, nodes, edges }) => {
+        try {
+          const r = await (
+            await api('/api/pages', {
+              method: 'POST',
+              body: JSON.stringify({ kind: 'canvas', title, parent_id, icon: icon || '🧩', content: { nodes, edges: edges || [] } }),
+            })
+          ).json();
+          return ok(`Canvas creado: "${r.title}" (id: ${r.id}, ruta: /p/${r.id}) con ${nodes.length} tarjeta(s).`);
+        } catch (e) {
+          return fail(e);
+        }
+      }
+    );
+
+    server.registerTool(
+      'update_canvas',
+      {
+        title: 'Actualizar canvas',
+        description:
+          'Reemplaza el contenido de un canvas por el JSON Canvas dado (lee antes el actual con read_page y conserva lo que no cambies). La versión anterior queda en el historial.',
+        inputSchema: { page_id: z.string().describe('Id del canvas'), ...canvasSchema },
+      },
+      async ({ page_id, nodes, edges }) => {
+        try {
+          const page = await (await api(`/api/pages/${page_id}`)).json();
+          if (page.kind !== 'canvas') return fail(new Error('Esa página no es un canvas: usa append_to_page, edit_page o update_page'));
+          await api(`/api/pages/${page_id}`, { method: 'PUT', body: JSON.stringify({ content: { nodes, edges: edges || [] } }) });
+          return ok(`Canvas "${page.title || 'Sin título'}" actualizado: ${nodes.length} tarjeta(s), ${(edges || []).length} conexión(es).`);
         } catch (e) {
           return fail(e);
         }

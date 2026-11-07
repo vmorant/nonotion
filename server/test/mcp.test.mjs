@@ -165,3 +165,41 @@ test('tag_page: quitar "Pegasus" quita "pegasus" y se guardan en minúsculas', a
   r = await call('tag_page', { page_id: p.id, remove: ['Pegasus'] });
   assert.match(r.text, /\(ninguna\)$/);
 });
+
+test('canvas por MCP: crear, leer, actualizar y protecciones', async () => {
+  const nota = await api('/api/pages', { title: 'Nota del canvas' });
+  let r = await call('create_canvas', {
+    title: 'Mapa',
+    nodes: [
+      { id: 't1', type: 'text', text: '# Plan', x: 0, y: 0, width: 260, height: 120 },
+      { id: 'f1', type: 'file', file: `/p/${nota.id}`, x: 320, y: 0, width: 300, height: 200 },
+    ],
+    edges: [{ id: 'e1', fromNode: 't1', toNode: 'f1', label: 'detalla' }],
+  });
+  assert.equal(r.isError, false, r.text);
+  const id = r.text.match(/id: ([A-Za-z0-9_-]+)/)[1];
+  assert.equal((await api(`/api/pages/${id}`)).kind, 'canvas');
+
+  r = await call('read_page', { page_id: id });
+  assert.match(r.text, /CANVAS/);
+  assert.match(r.text, /"Plan" ---> página «Nota del canvas»: detalla/);
+  assert.match(r.text, /JSON Canvas:\n```json\n\{"nodes"/);
+
+  // el grafo y los backlinks ven el enlace del canvas a la página
+  const g = await api('/api/graph');
+  assert.ok(g.links.some((l) => l.source === id && l.target === nota.id));
+  assert.ok((await api(`/api/pages/${nota.id}/backlinks`)).some((b) => b.id === id));
+
+  r = await call('update_canvas', { page_id: id, nodes: [{ id: 'solo', type: 'text', text: 'nuevo', x: 0, y: 0, width: 200, height: 100 }] });
+  assert.equal(r.isError, false, r.text);
+  assert.equal(JSON.parse((await api(`/api/pages/${id}`)).content).nodes[0].id, 'solo');
+  assert.ok((await api(`/api/pages/${id}/versions`)).length >= 1, 'la versión anterior queda en el historial');
+
+  // no se puede estropear un canvas con Markdown, ni usar update_canvas en un documento
+  assert.match((await call('append_to_page', { page_id: id, markdown: 'x' })).text, /es un canvas/);
+  assert.match((await call('update_page', { page_id: id, markdown: 'x' })).text, /canvas/);
+  assert.match((await call('update_canvas', { page_id: nota.id, nodes: [] })).text, /no es un canvas/);
+  r = await call('create_canvas', { title: 'Malo', nodes: [{ id: 'x', type: 'nada', x: 0, y: 0, width: 1, height: 1 }] });
+  assert.equal(r.isError, true);
+  assert.match(r.text, /tipo "nada" no válido/);
+});

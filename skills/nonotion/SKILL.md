@@ -64,6 +64,15 @@ Antes de crear, busca por si ya existe una página del tema y ofrécela.
   contenido, etiquetas ni ids. Como cualquier escritura, solo cuando el
   usuario lo pida (o lo apruebe tras proponérselo).
 - **Etiquetas**: no distinguen mayúsculas y se guardan en minúsculas.
+- **Canvas** (lienzo visual, formato JSON Canvas como Obsidian): `list_pages`
+  marca los canvas; `read_page` devuelve su resumen y su JSON. Para mapas
+  mentales, diagramas o tableros que pida el usuario, `create_canvas` con
+  tarjetas `text` (Markdown), `file` (`/p/<id>` para enlazar una página),
+  `link` y `group`, y conexiones entre ellas. Para cambiar uno, lee su JSON y
+  envíalo entero con `update_canvas` (conserva lo que no cambies). No uses
+  append/edit/update_page en un canvas. Coloca las tarjetas sin solaparse.
+- **Enlazar páginas** con `[Título](/p/<id>)` hace que aparezcan conectadas en
+  el grafo de NoNotion.
 - **Adjuntos**: `read_page` lista los adjuntos con su `file_id`.
   `read_attachment` lee su contenido: extrae el texto de PDF, Word y
   PowerPoint, devuelve las hojas de Excel completas en CSV, y muestra imágenes y archivos de texto/código. Si un PDF está

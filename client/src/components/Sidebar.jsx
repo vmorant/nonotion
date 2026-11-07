@@ -16,6 +16,8 @@ import {
   Download,
   Link2,
   ChevronsUpDown,
+  LayoutDashboard,
+  Waypoints,
 } from 'lucide-react';
 
 function TreeItem({ page, index, childrenMap, depth, onCreate, onDelete, onDuplicate, onMove, onFavorite, onMoveTo }) {
@@ -83,7 +85,7 @@ function TreeItem({ page, index, childrenMap, depth, onCreate, onDelete, onDupli
             <span className="tree-dot" />
           )}
         </button>
-        <span className="tree-icon">{page.icon || '📄'}</span>
+        <span className="tree-icon">{page.icon || (page.kind === 'canvas' ? '🧩' : '📄')}</span>
         <span className="tree-title">{page.title || 'Sin título'}</span>
         {page.shared ? (
           <span className="tree-shared" title="Compartida públicamente">
@@ -128,6 +130,14 @@ function TreeItem({ page, index, childrenMap, depth, onCreate, onDelete, onDupli
             }}
           >
             Añadir subpágina
+          </button>
+          <button
+            onClick={() => {
+              setMenuOpen(false);
+              onCreate(page.id, 'canvas');
+            }}
+          >
+            Añadir canvas dentro
           </button>
           <button
             onClick={() => {
@@ -222,7 +232,7 @@ function QuickSection({ name, title, items, byId }) {
               className={({ isActive }) => 'tree-item quick-item' + (isActive ? ' active' : '')}
               title={parent ? `${parent.title || 'Sin título'} / ${p.title || 'Sin título'}` : p.title}
             >
-              <span className="tree-icon">{p.icon || '📄'}</span>
+              <span className="tree-icon">{p.icon || (p.kind === 'canvas' ? '🧩' : '📄')}</span>
               <span className="tree-title">{p.title || 'Sin título'}</span>
               {parent && <span className="quick-parent">{parent.title || 'Sin título'}</span>}
             </NavLink>
@@ -347,9 +357,14 @@ export default function Sidebar({
       <div className="sidebar-section">
         <div className="sidebar-section-title">
           <span>Páginas</span>
-          <button className="icon-btn" onClick={() => onCreate(null)} title="Nueva página">
-            <Plus size={14} />
-          </button>
+          <span className="sidebar-section-actions">
+            <button className="icon-btn" onClick={() => onCreate(null, 'canvas')} title="Nuevo canvas">
+              <LayoutDashboard size={14} />
+            </button>
+            <button className="icon-btn" onClick={() => onCreate(null)} title="Nueva página">
+              <Plus size={14} />
+            </button>
+          </span>
         </div>
         <div
           className="tree"
@@ -384,6 +399,9 @@ export default function Sidebar({
       <div className="sidebar-tools">
         <NavLink to="/calendar" className={({ isActive }) => 'sidebar-tool-link' + (isActive ? ' active' : '')}>
           <CalendarDays size={16} strokeWidth={1.8} /> Calendario
+        </NavLink>
+        <NavLink to="/graph" className={({ isActive }) => 'sidebar-tool-link' + (isActive ? ' active' : '')}>
+          <Waypoints size={16} strokeWidth={1.8} /> Grafo
         </NavLink>
         <NavLink to="/tags" className={({ isActive }) => 'sidebar-tool-link' + (isActive ? ' active' : '')}>
           <Tags size={16} strokeWidth={1.8} /> Etiquetas
