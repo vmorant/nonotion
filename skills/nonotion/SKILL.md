@@ -54,8 +54,16 @@ Antes de crear, busca por si ya existe una página del tema y ofrécela.
 
 - **Reuniones**: página con `page_date` (YYYY-MM-DD) para que aparezca en el
   calendario. Estructura típica: 👥 Asistentes, 📋 Agenda, 📝 Notas, ✅ Acciones.
-- **Sin destino claro**: `create_page` sin `parent_id` la deja en "📥 Inbox",
-  que el usuario organiza después.
+- **Dónde crear**: antes de `create_page`, mira `list_pages` (o `search_pages`)
+  y elige el padre temático adecuado. Usa "📥 Inbox" (sin `parent_id`) solo si
+  no encaja en ninguna sección.
+- **Reorganizar**: `move_page` mueve una página con sus subpáginas bajo otro
+  padre (`new_parent_id`, o `null` para la raíz), opcionalmente en una posición
+  (`position`, `before_id`, `after_id`). Para varias, `move_pages` en una sola
+  llamada: es atómico, si una falla no se mueve ninguna. Mover no cambia
+  contenido, etiquetas ni ids. Como cualquier escritura, solo cuando el
+  usuario lo pida (o lo apruebe tras proponérselo).
+- **Etiquetas**: no distinguen mayúsculas y se guardan en minúsculas.
 - **Adjuntos**: `read_page` lista los adjuntos con su `file_id`.
   `read_attachment` lee su contenido: extrae el texto de PDF, Word y
   PowerPoint, devuelve las hojas de Excel completas en CSV, y muestra imágenes y archivos de texto/código. Si un PDF está

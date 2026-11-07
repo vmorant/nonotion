@@ -2903,3 +2903,19 @@ button.page-icon:hover {
 .ws-tokens .ws-hint {
   margin: 0;
 }
+
+/* ---------- Mover a… ---------- */
+
+.move-title {
+  padding: 12px 14px 0;
+  font-weight: 600;
+}
+
+.move-modal .ws-error {
+  margin: 8px 14px 0;
+}
+
+.move-current {
+  color: var(--text-dim);
+  font-size: 0.8rem;
+}

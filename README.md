@@ -14,7 +14,7 @@ Webapp autoalojada tipo Notion, **sin límites de capacidad**: tus apuntes, resp
 - **Captura desde el PC de IA** — `POST /api/capture` acepta Markdown directamente y el CLI `cli/nonotion-send.sh` (o `.ps1` en Windows) crea una página desde el portapapeles o stdin con un comando, sin abrir el navegador. Las capturas van a una página "📥 Inbox".
 - **Historial de versiones** — snapshots automáticos al editar (máx. uno cada 10 min, se conservan 50 por página) con vista previa y restauración, como el Page History de Notion.
 - **Papelera** — eliminar mueve a la papelera (con subpáginas y archivos); restaurable durante 30 días, después se purga automáticamente.
-- **Organiza arrastrando** — arrastra páginas en el árbol para reordenarlas o anidarlas; duplica páginas (subárbol y archivos incluidos) con un clic.
+- **Organiza arrastrando** — arrastra páginas en el árbol para reordenarlas o anidarlas, o usa **Mover a…** en su menú ⋯ para elegir el destino con buscador; duplica páginas (subárbol y archivos incluidos) con un clic. Claude reorganiza igual con `move_page` / `move_pages` (misma lógica y validaciones).
 - **Visor de documentos integrado** — clic en un adjunto y se abre dentro de NoNotion: PDF, imágenes, vídeo, audio y texto/código directamente, y **Word, Excel y PowerPoint** convertidos a PDF en el servidor con LibreOffice (con caché: la primera apertura tarda unos segundos, las siguientes son instantáneas). Nada sale de tu servidor — sin visores de Google/Microsoft.
 - **Visor de Excel de verdad** — los `.xlsx`, `.xls`, `.ods` y `.csv` se abren como hoja de cálculo: pestañas de hojas (las ocultas en cursiva), cabecera de columnas y números de fila fijos, celdas combinadas, anchos de columna del original y buscador que filtra filas. Si quieres ver el formato de impresión, "Ver como PDF" usa la conversión de LibreOffice. Claude (MCP `read_attachment`) recibe todas las hojas completas en CSV.
 - **Índice lateral y secciones plegables** — en páginas con 3 o más encabezados aparece un índice a la derecha que resalta la sección visible y salta a cada una. Cada encabezado tiene un triángulo para plegar su sección (solo visual: el contenido se guarda y exporta entero; lo plegado se recuerda por página en el navegador).
@@ -30,7 +30,7 @@ Webapp autoalojada tipo Notion, **sin límites de capacidad**: tus apuntes, resp
 - **Favoritas y recientes** — ★ en una página (o en su menú ⋯ del árbol) la fija arriba en la barra lateral; "Recientes" muestra las últimas páginas que abriste en ese navegador.
 - **Enlaces que se abren** — clic en un enlace: burbuja con *Abrir* (páginas de NoNotion se abren dentro de la app; adjuntos en el visor), *Pestaña nueva*, *Vista previa* de webs externas (si la web permite mostrarse dentro de otra), editar y quitar. `Ctrl/⌘+clic` o clic central abren directamente en pestaña nueva.
 - **Enlaces entre páginas** — escribe `[[` (o `/enlace`) para buscar una página y enlazarla; pegar la URL de una página de NoNotion la convierte en enlace con su título. Cada página muestra abajo "↩ Enlazada desde" con las páginas que la enlazan.
-- **Etiquetas** — clasifica cada página con etiquetas de colores (bajo el título, con autocompletado). La vista **🏷 Etiquetas** filtra por una o varias (todas / alguna), lista también los adjuntos de esas páginas y tiene un filtro "Sin etiquetar" para ir clasificando. Renombrar (fusiona si ya existe), cambiar color o borrar desde su menú ⋯. En la búsqueda `Ctrl+K`, `#etiqueta` filtra resultados. Claude las lee y, si se lo pides, las aplica (`list_tags`, `tag_page`).
+- **Etiquetas** — clasifica cada página con etiquetas de colores (siempre en minúsculas, sin distinguir mayúsculas) (bajo el título, con autocompletado). La vista **🏷 Etiquetas** filtra por una o varias (todas / alguna), lista también los adjuntos de esas páginas y tiene un filtro "Sin etiquetar" para ir clasificando. Renombrar (fusiona si ya existe), cambiar color o borrar desde su menú ⋯. En la búsqueda `Ctrl+K`, `#etiqueta` filtra resultados. Claude las lee y, si se lo pides, las aplica (`list_tags`, `tag_page`).
 - **Imágenes ágiles** — al pegar o arrastrar, la imagen aparece al instante donde la sueltas con la subida avanzando encima. Redimensiona arrastrando los tiradores laterales, o con la barra al seleccionarla (25/50/75/100 %, original), alinéala a izquierda/centro/derecha, y ábrela a tamaño completo con doble clic. El tamaño se guarda en la página y se respeta cuando Claude la edita.
 - **Export ZIP completo** — descarga todo el workspace como Markdown + archivos adjuntos con enlaces relativos: backup portable, cero lock-in.
 - **Calendario propio (sin integraciones externas)** — vista mensual y semanal que muestra qué páginas creaste y editaste cada día (registro de actividad interno): de un vistazo ves en qué trabajaste y qué días no. Los datos antiguos se reconstruyen automáticamente desde el historial de versiones.
@@ -54,6 +54,7 @@ Webapp autoalojada tipo Notion, **sin límites de capacidad**: tus apuntes, resp
 npm install
 npm run build        # compila el frontend (client/dist)
 npm run dev          # servidor en http://localhost:3000
+npm test             # prueba del editor + tests del servidor (node --test server/test/)
 ```
 
 Para desarrollo con recarga del frontend:
@@ -63,6 +64,13 @@ npm run dev                      # terminal 1: API en :3000
 cd client && npm run dev         # terminal 2: Vite en :5173 con proxy a la API
 ```
 
+## Ramas y cambios
+
+- **`main`** es la rama estable: lo que hay en `main` es lo que corre en el servidor.
+- Cada cambio se hace en una rama propia (`feature/…`, `fix/…`) y entra en `main` mediante un **pull request** que pase `npm test`.
+- Al fusionar: se despliega desde `main` y se borra la rama del cambio.
+- Antes de desplegar algo que toque la base de datos: snapshot del contenedor (o `backups/pre-update/`, que `install.sh` crea solo).
+
 ## Instalación en el LXC de Proxmox
 
 Recomendado: LXC Debian 12, 2 vCPU, **2 GB de RAM** (LibreOffice convierte los documentos de Office para el visor; con 1 GB funciona, pero los documentos grandes van justos) y el disco que quieras para tus archivos.
@@ -70,7 +78,7 @@ Recomendado: LXC Debian 12, 2 vCPU, **2 GB de RAM** (LibreOffice convierte los d
 ```bash
 # Dentro del contenedor, como root:
 apt-get update && apt-get install -y git
-git clone https://github.com/vmorant/nonotion.git /root/nonotion
+git clone -b main https://github.com/vmorant/nonotion.git /root/nonotion
 cd /root/nonotion
 bash deploy/install.sh
 ```
@@ -85,8 +93,10 @@ journalctl -u nonotion -f
 Para actualizar más adelante:
 
 ```bash
-cd /root/nonotion && git pull && bash deploy/install.sh
+cd /root/nonotion && git checkout main && git pull --ff-only && bash deploy/install.sh
 ```
+
+El servidor se despliega siempre desde `main` (ver [Ramas y cambios](#ramas-y-cambios)).
 
 (Los datos en `/var/lib/nonotion` nunca se tocan; antes de cada actualización se guarda una copia de la base de datos en `backups/pre-update/`.)
 
@@ -198,10 +208,12 @@ Solo si usas Access: los clientes MCP no pueden pasar el login de Zero Trust, as
 | `edit_page` | Sustituir un fragmento exacto del Markdown |
 | `update_page` | Reescribir contenido/título/icono/fecha (queda versión anterior en el historial) |
 | `trash_page` | Mover a la papelera (reversible; no existe borrado definitivo vía MCP) |
+| `move_page` | Mover una página (con sus subpáginas) bajo otro padre o a la raíz, con posición opcional (`position`, `before_id`, `after_id`); no cambia contenido, etiquetas ni ids |
+| `move_pages` | Varios movimientos en una sola llamada, atómicos: si uno no es válido no se aplica ninguno |
 | `read_attachment` | Leer el contenido de un adjunto: texto de PDF/Word/PowerPoint, hojas de Excel/ODS/CSV completas en CSV, imágenes y archivos de texto/código |
 | `read_document_pages` | Renderiza páginas concretas de un PDF/documento como imágenes (escaneados, diagramas, tablas con formato) |
 | `attach_file` | Subir un archivo (código generado, configs…) a una página; rechaza binarios incompletos |
-| `list_tags` / `tag_page` | Ver las etiquetas existentes / añadir o quitar etiquetas de una página |
+| `list_tags` / `tag_page` | Ver las etiquetas existentes / añadir o quitar etiquetas de una página (en minúsculas: `Pegasus` = `pegasus`) |
 
 ### Skill recomendada
 
@@ -239,7 +251,8 @@ En `skills/nonotion/SKILL.md` hay una skill lista para tu Claude: cópiala a `~/
 | POST/DELETE | `/api/pages/:id/share` | Activar / desactivar enlace público |
 | GET | `/api/share/:token` | Página compartida (pública) |
 | POST | `/api/capture` | Crear página desde Markdown (`{markdown, title?, parent_id?, page_date?, icon?, tags?}`) |
-| POST | `/api/pages/:id/move` | Mover en el árbol (`{parent_id, index}`) |
+| POST | `/api/pages/:id/move` | Mover en el árbol con su subárbol (`{parent_id, index? \| before_id? \| after_id?}`; sin posición, al final) |
+| POST | `/api/move-pages` | Varios movimientos atómicos (`{moves: [{page_id, parent_id, index?, before_id?, after_id?}]}`) |
 | POST | `/api/pages/:id/duplicate` | Duplicar subárbol con archivos |
 | GET | `/api/pages/:id/versions` | Historial de versiones |
 | POST | `/api/pages/:id/restore-version/:vid` | Restaurar una versión |

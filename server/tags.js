@@ -6,11 +6,64 @@ export const TAG_COLORS = ['gray', 'red', 'orange', 'yellow', 'green', 'teal', '
 const MAX_TAG_LENGTH = 40;
 const SEP = '\u001f';
 
-// "#Cliente AXA " → "Cliente AXA"; null si no queda nada válido
+// "#Cliente AXA " → "cliente axa"; null si no queda nada válido. Siempre en
+// minúsculas: "Pegasus" y "pegasus" son la misma etiqueta al guardar, al
+// comparar y al quitar (también con acentos y eñes, que NOCASE de SQLite no pliega)
 export function normalizeTag(raw) {
   if (typeof raw !== 'string') return null;
-  const t = raw.replace(/^#+/, '').replace(/[,\u001f]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, MAX_TAG_LENGTH);
+  const t = raw
+    .replace(/^#+/, '')
+    .replace(/[,\u001f]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .toLowerCase()
+    .slice(0, MAX_TAG_LENGTH);
   return t || null;
+}
+
+// Renombra una etiqueta del espacio también en sus páginas. No basta con ON
+// UPDATE CASCADE: si solo cambian mayúsculas (Riesgos → riesgos), SQLite
+// compara con NOCASE, da la clave por igual y no propaga el cambio.
+function renameTag(ws, from, to) {
+  db.prepare('UPDATE tags SET name = ? WHERE workspace_id = ? AND name = ?').run(to, ws, from);
+  db.prepare('UPDATE page_tags SET tag = ? WHERE workspace_id = ? AND tag = ?').run(to, ws, from);
+}
+
+// Migración: todas las etiquetas a minúsculas. Si dos solo difieren en
+// mayúsculas (p. ej. "Ñandú" y "ñandú"), se fusionan en una: sus páginas pasan
+// a la que queda y se conserva el color de la más antigua. Idempotente.
+export function lowercaseTags() {
+  const rows = db.prepare('SELECT workspace_id, name, color, created_at FROM tags ORDER BY created_at, rowid').all();
+  const groups = new Map();
+  for (const t of rows) {
+    const key = `${t.workspace_id}\u001f${normalizeTag(t.name) || t.name}`;
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(t);
+  }
+  let renamed = 0;
+  let merged = 0;
+  db.transaction(() => {
+    for (const [key, list] of groups) {
+      const target = key.split('\u001f')[1];
+      if (list.length === 1 && list[0].name === target) continue;
+      const [keep, ...dups] = list;
+      for (const d of dups) {
+        // las páginas de la duplicada pasan a la que se queda (sin repetirse)
+        db.prepare(
+          `INSERT OR IGNORE INTO page_tags (page_id, workspace_id, tag)
+           SELECT page_id, workspace_id, ? FROM page_tags WHERE workspace_id = ? AND tag = ?`
+        ).run(keep.name, d.workspace_id, d.name);
+        db.prepare('DELETE FROM tags WHERE workspace_id = ? AND name = ?').run(d.workspace_id, d.name);
+        merged++;
+      }
+      if (keep.name !== target) {
+        renameTag(keep.workspace_id, keep.name, target);
+        renamed++;
+      }
+    }
+  })();
+  if (renamed || merged) console.log(`Etiquetas a minúsculas: ${renamed} renombradas, ${merged} fusionadas`);
+  return { renamed, merged };
 }
 
 // Color estable a partir del nombre, para que una etiqueta nueva no sea siempre gris
@@ -33,9 +86,10 @@ function ensureTag(ws, name) {
 
 export function tagsOf(pageId) {
   return db
-    .prepare('SELECT tag FROM page_tags WHERE page_id = ? ORDER BY tag COLLATE NOCASE')
+    .prepare('SELECT tag FROM page_tags WHERE page_id = ?')
     .all(pageId)
-    .map((r) => r.tag);
+    .map((r) => r.tag)
+    .sort((a, b) => a.localeCompare(b, 'es')); // igual que splitTags (ñ entre n y o)
 }
 
 // Columna SQL con las etiquetas de cada página (para listados)
@@ -129,8 +183,7 @@ export function mountTags(app, { notifyTree }) {
           db.prepare('DELETE FROM tags WHERE workspace_id = ? AND name = ?').run(ws, tag.name);
           finalName = existing.name;
         } else {
-          // ON UPDATE CASCADE renombra también en page_tags
-          db.prepare('UPDATE tags SET name = ? WHERE workspace_id = ? AND name = ?').run(n, ws, tag.name);
+          renameTag(ws, tag.name, n);
           finalName = n;
         }
       })();
