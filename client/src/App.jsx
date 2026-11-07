@@ -21,6 +21,7 @@ import WorkspaceSettings from './components/WorkspaceSettings.jsx';
 import { LogoMark, Wordmark } from './components/Logo.jsx';
 import { PanelLeftOpen } from 'lucide-react';
 import GraphPage from './components/graph/GraphPage.jsx';
+import IdeasView from './components/ideas/IdeasView.jsx';
 
 export default function App() {
   const [pages, setPages] = useState([]);
@@ -261,6 +262,7 @@ export default function App() {
           <Route path="/tags" element={<TagsView pages={pages} tags={tags} onChanged={refreshTree} />} />
           <Route path="/calendar" element={<CalendarView />} />
           <Route path="/graph" element={<GraphPage pages={pages} />} />
+          <Route path="/ideas" element={<IdeasView pages={pages} onChanged={refreshTree} />} />
           <Route
             path="*"
             element={
@@ -281,6 +283,7 @@ export default function App() {
                   <li>Escribe <kbd>/</kbd> en una página para insertar bloques.</li>
                   <li>Arrastra archivos a una página para adjuntarlos.</li>
                   <li>Pulsa <kbd>Ctrl</kbd>+<kbd>K</kbd> para buscar.</li>
+                  <li>Guarda capturas y textos sueltos en <strong>Ideas</strong> y desarróllalos con Claude hasta documentarlos.</li>
                   <li>Envía respuestas desde tu PC de IA con <code>cli/nonotion-send.sh</code>.</li>
                 </ul>
                 <button className="btn primary" onClick={() => createPage(null)}>

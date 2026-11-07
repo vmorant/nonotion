@@ -15,6 +15,8 @@ apt-get install -y curl ca-certificates git build-essential python3 rsync
 apt-get install -y --no-install-recommends libreoffice-writer libreoffice-calc libreoffice-impress fonts-liberation
 # poppler: lectura de contenido de PDF/Office por Claude (extracción de texto y render de páginas)
 apt-get install -y poppler-utils
+# tesseract: OCR de las capturas que se guardan como semilla de una idea (para poder buscarlas)
+apt-get install -y tesseract-ocr tesseract-ocr-spa tesseract-ocr-eng || echo '    (tesseract no disponible: las capturas no serán buscables por su texto)'
 
 if ! command -v node >/dev/null || [ "$(node -v | cut -d. -f1 | tr -d v)" -lt 20 ]; then
   echo "==> Instalando Node.js 20 (NodeSource)"

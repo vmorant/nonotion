@@ -203,3 +203,123 @@ test('canvas por MCP: crear, leer, actualizar y protecciones', async () => {
   assert.equal(r.isError, true);
   assert.match(r.text, /tipo "nada" no válido/);
 });
+
+test('ideas por MCP: crear, desarrollar, materializar, leer y protecciones', async () => {
+  const { tools } = await rpc('tools/list', {});
+  const names = tools.map((t) => t.name);
+  for (const n of ['list_ideas', 'create_idea', 'develop_idea', 'materialize_idea']) assert.ok(names.includes(n), `${n} registrada`);
+
+  const origen = await api('/api/capture', { title: 'Nota origen', markdown: 'Texto de la nota' });
+  let r = await call('create_idea', { seed_text: 'Temas:\n- ingesta única\n- costes', seed_url: 'https://example.com/ref', tags: ['Ingesta'] });
+  assert.equal(r.isError, false, r.text);
+  const id = r.text.match(/id: ([A-Za-z0-9_-]+)/)[1];
+  const page = await api(`/api/pages/${id}`);
+  assert.equal(page.kind, 'idea');
+  assert.equal(page.parent_id, null, 'fuera del árbol');
+  assert.equal(page.title, 'Temas:', 'título derivado de la semilla');
+  assert.deepEqual(page.tags, ['ingesta']);
+  const idea0 = JSON.parse(page.content);
+  assert.equal(idea0.seeds.length, 2);
+  assert.equal(idea0.status, 'seed');
+
+  // las ideas no salen en el árbol de list_pages, sí en list_ideas
+  r = await call('list_pages', {});
+  assert.doesNotMatch(r.text, /Temas:/);
+  assert.match(r.text, /Ideas en desarrollo \(fuera del árbol\): 1/);
+  r = await call('list_ideas', {});
+  assert.match(r.text, new RegExp(`Temas: \\(id: ${id}, semilla, 2 semilla\\(s\\), 0 paso\\(s\\), 0 resultado\\(s\\)\\)`));
+
+  // la búsqueda encuentra la idea por el texto de su semilla
+  const found = await api('/api/search?q=ingesta');
+  assert.ok(found.some((p) => p.id === id), 'la idea es buscable');
+
+  r = await call('develop_idea', {
+    page_id: id,
+    steps: [
+      { kind: 'question', text: '¿Qué fuentes entran?' },
+      { kind: 'decision', text: `Partimos de [Nota origen](/p/${origen.id})` },
+    ],
+    summary: 'Un único pipeline de ingesta',
+  });
+  assert.equal(r.isError, false, r.text);
+  assert.match(r.text, /2 paso\(s\) en total, estado developing/);
+
+  r = await call('read_page', { page_id: id });
+  assert.match(r.text, /es una IDEA/);
+  assert.match(r.text, /## Resumen\n\nUn único pipeline de ingesta/);
+  assert.match(r.text, /Pregunta \(Claude\):\n {4}¿Qué fuentes entran\?/);
+  assert.match(r.text, /enlace https:\/\/example\.com\/ref/);
+
+  // materializar: documento + diagrama + planning
+  const doc = await api('/api/capture', { title: 'Diseño de ingesta', markdown: `De la idea [💡](/p/${id})` });
+  const mapa = await call('create_canvas', { title: 'Mapa ingesta', nodes: [{ id: 'a', type: 'file', file: `/p/${id}`, x: 0, y: 0, width: 300, height: 200 }] });
+  const mapaId = mapa.text.match(/id: ([A-Za-z0-9_-]+)/)[1];
+  const plan = await api('/api/capture', { title: 'Plan ingesta', markdown: '- [ ] fase 1', page_date: '2026-12-01' });
+  r = await call('materialize_idea', {
+    page_id: id,
+    outcomes: [
+      { type: 'page', page_id: doc.id, label: 'Documento de diseño' },
+      { type: 'page', page_id: mapaId, label: 'Diagrama' },
+      { type: 'plan', page_id: plan.id, label: 'Planning' },
+      { type: 'external', url: 'https://docs.google.com/document/d/xyz', label: 'Doc compartido' },
+    ],
+  });
+  assert.equal(r.isError, false, r.text);
+  assert.match(r.text, /materializada \(documented\): 4 resultado/);
+  const idea1 = JSON.parse((await api(`/api/pages/${id}`)).content);
+  assert.equal(idea1.status, 'documented');
+  assert.equal(idea1.outcomes[1].type, 'canvas', 'un resultado que apunta a un canvas se marca como canvas');
+
+  // grafo y backlinks en ambos sentidos
+  const g = await api('/api/graph');
+  assert.ok(g.pages.some((p) => p.id === id && p.kind === 'idea'));
+  for (const target of [origen.id, doc.id, mapaId, plan.id]) {
+    assert.ok(g.links.some((l) => l.source === id && l.target === target), `enlace idea → ${target}`);
+  }
+  assert.ok(g.links.some((l) => l.source === doc.id && l.target === id), 'el documento enlaza a la idea');
+  assert.ok((await api(`/api/pages/${plan.id}/backlinks`)).some((b) => b.id === id), 'el plan ve la idea en sus backlinks');
+  assert.ok((await api(`/api/pages/${id}/backlinks`)).some((b) => b.id === doc.id), 'la idea ve al documento');
+  assert.ok((await api(`/api/pages/${id}/versions`)).length >= 2, 'cada parche deja versión');
+
+  // la vista Ideas y list_ideas con filtro
+  const list = await api('/api/ideas');
+  assert.equal(list.length, 1);
+  assert.equal(list[0].status, 'documented');
+  assert.equal(list[0].outcomes.length, 4);
+  assert.match((await call('list_ideas', { status: 'seed' })).text, /No hay ideas en estado "seed"/);
+
+  // protecciones: nada de Markdown sobre una idea, ni mover al árbol, ni herramientas de idea sobre documentos
+  assert.match((await call('append_to_page', { page_id: id, markdown: 'x' })).text, /es una idea/);
+  assert.match((await call('edit_page', { page_id: id, find_text: 'a', replace_text: 'b' })).text, /es una idea/);
+  assert.match((await call('update_page', { page_id: id, markdown: 'x' })).text, /idea/);
+  assert.match((await call('move_page', { page_id: id, new_parent_id: origen.id })).text, /es una idea/);
+  assert.match((await call('move_page', { page_id: origen.id, new_parent_id: id })).text, /no puede contener/);
+  assert.match((await call('develop_idea', { page_id: origen.id, steps: [{ kind: 'note', text: 'x' }] })).text, /no es una idea/);
+  assert.match((await call('materialize_idea', { page_id: id, outcomes: [{ type: 'page' }] })).text, /falta page_id/);
+  const bad = await fetch(`${BASE}/api/pages/${id}/idea`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ outcomes_add: [{ type: 'page', page_id: 'noexiste1234' }] }),
+  });
+  assert.equal(bad.status, 400);
+  assert.match((await bad.json()).error, /no existe/);
+  // la idea no puede ser su propio resultado ni colgar de un padre
+  assert.equal((await fetch(`${BASE}/api/pages`, { method: 'POST', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ kind: 'idea', parent_id: origen.id }) })).status, 400);
+
+  // una captura como semilla: OCR si hay tesseract; siempre visible para Claude como adjunto
+  const png = Buffer.from(
+    'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==',
+    'base64'
+  );
+  const fd = new FormData();
+  fd.append('page_id', id);
+  fd.append('file', new Blob([png], { type: 'image/png' }), 'captura.png');
+  const up = await (await fetch(`${BASE}/api/files`, { method: 'POST', headers: { Authorization: `Bearer ${token}` }, body: fd })).json();
+  const withSeed = await api(`/api/pages/${id}/idea`, { seeds_add: [{ kind: 'file', file_id: up.id }] });
+  const seed = withSeed.idea.seeds.at(-1);
+  assert.equal(seed.kind, 'image', 'un archivo de imagen pasa a ser captura');
+  assert.equal(typeof seed.ocr, 'string');
+  r = await call('read_page', { page_id: id });
+  assert.match(r.text, new RegExp(`captura captura\\.png \\(file_id: ${up.id}\\)`));
+  assert.match(r.text, new RegExp(`captura\\.png \\(file_id: ${up.id}, image/png`), 'y aparece como adjunto para read_attachment');
+});

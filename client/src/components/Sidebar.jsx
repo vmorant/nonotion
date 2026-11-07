@@ -18,6 +18,7 @@ import {
   ChevronsUpDown,
   LayoutDashboard,
   Waypoints,
+  Lightbulb,
 } from 'lucide-react';
 
 function TreeItem({ page, index, childrenMap, depth, onCreate, onDelete, onDuplicate, onMove, onFavorite, onMoveTo }) {
@@ -323,8 +324,11 @@ export default function Sidebar({
   const favorites = pages.filter((p) => p.favorite_at).sort((a, b) => a.favorite_at.localeCompare(b.favorite_at));
   const recentPages = recent.map((id) => byId.get(id)).filter(Boolean).slice(0, RECENT_SHOWN);
 
+  // Las ideas viven en su propia vista, no en el árbol
+  const ideasCount = pages.filter((p) => p.kind === 'idea').length;
   const childrenMap = new Map();
   for (const p of pages) {
+    if (p.kind === 'idea') continue;
     const key = p.parent_id || null;
     if (!childrenMap.has(key)) childrenMap.set(key, []);
     childrenMap.get(key).push(p);
@@ -399,6 +403,10 @@ export default function Sidebar({
       <div className="sidebar-tools">
         <NavLink to="/calendar" className={({ isActive }) => 'sidebar-tool-link' + (isActive ? ' active' : '')}>
           <CalendarDays size={16} strokeWidth={1.8} /> Calendario
+        </NavLink>
+        <NavLink to="/ideas" className={({ isActive }) => 'sidebar-tool-link' + (isActive ? ' active' : '')}>
+          <Lightbulb size={16} strokeWidth={1.8} /> Ideas
+          {ideasCount > 0 && <span className="sidebar-count">{ideasCount}</span>}
         </NavLink>
         <NavLink to="/graph" className={({ isActive }) => 'sidebar-tool-link' + (isActive ? ' active' : '')}>
           <Waypoints size={16} strokeWidth={1.8} /> Grafo

@@ -172,6 +172,10 @@ export const api = {
   pageMarkdown: (id) => req(`/api/pages/${id}/markdown`),
   capture: (data) => req('/api/capture', { method: 'POST', body: JSON.stringify(data) }),
   graph: () => req('/api/graph'),
+  // Ideas (desarrollo de ideas fuera del árbol)
+  ideas: () => req('/api/ideas'),
+  createIdea: (data) => req('/api/pages', { method: 'POST', body: JSON.stringify({ ...data, kind: 'idea' }) }),
+  patchIdea: (id, patch) => req(`/api/pages/${id}/idea`, { method: 'POST', body: JSON.stringify(patch) }),
   tags: () => req('/api/tags'),
   setPageTags: (id, tags) => req(`/api/pages/${id}/tags`, { method: 'PUT', body: JSON.stringify({ tags }) }),
   updateTag: (name, data) => req(`/api/tags/${encodeURIComponent(name)}`, { method: 'PATCH', body: JSON.stringify(data) }),

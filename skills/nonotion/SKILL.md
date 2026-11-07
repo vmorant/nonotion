@@ -73,6 +73,30 @@ Antes de crear, busca por si ya existe una página del tema y ofrécela.
   append/edit/update_page en un canvas. Coloca las tarjetas sin solaparse.
 - **Enlazar páginas** con `[Título](/p/<id>)` hace que aparezcan conectadas en
   el grafo de NoNotion.
+- **Ideas** (desarrollo de ideas, fuera del árbol; vista Ideas): una idea
+  separa **semilla** (lo que llegó: texto, captura, enlace, fragmento de una
+  página; no se reescribe), **desarrollo** (pasos fechados) y **resultado**
+  (dónde se materializó). Estados: seed → developing → documented → archived.
+  - Guardar: `create_idea` cuando el usuario diga "guárdalo como idea" (texto,
+    lista de temas, enlace o `source_page_id`). Una captura: crea la idea y
+    adjúntala con `attach_file`; aparecerá como semilla.
+  - Desarrollar ("desarrolla la idea X"): `list_ideas` → `read_page` de la idea
+    (mira sus capturas con `read_attachment`). Haz preguntas concretas y
+    conversa; NO escribas hasta que el usuario lo pida. Cuando lo pida, deja
+    constancia con `develop_idea`: pasos cortos y de un solo tipo cada uno
+    (`question` lo que falta por saber, `answer` lo que el usuario responde,
+    `hypothesis`, `decision` lo acordado, `discarded` lo descartado y por qué,
+    `outline` el esquema del documento). Actualiza `summary` con el enunciado
+    de la idea en una o dos frases cuando se aclare.
+  - Materializar ("documéntala"): propón primero la forma: una página de
+    documentación (`create_page` bajo el padre temático, no en Inbox), un
+    diagrama o mapa (`create_canvas`), un planning (`create_page` con tabla de
+    hitos/tareas y `page_date`), un archivo (`attach_file`) o un documento
+    externo. Enlaza desde lo creado a la idea con `[💡 Título](/p/<idea_id>)`.
+    Después registra todo con `materialize_idea` (varios resultados a la vez
+    si procede): la idea pasa a documented y queda conectada en el grafo.
+  - Nunca uses `append_to_page`/`edit_page`/`update_page` ni `move_page` con
+    una idea (el servidor lo rechaza).
 - **Adjuntos**: `read_page` lista los adjuntos con su `file_id`.
   `read_attachment` lee su contenido: extrae el texto de PDF, Word y
   PowerPoint, devuelve las hojas de Excel completas en CSV, y muestra imágenes y archivos de texto/código. Si un PDF está

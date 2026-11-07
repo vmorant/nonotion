@@ -17,7 +17,7 @@ export class MoveError extends Error {
   }
 }
 
-const getPage = db.prepare('SELECT id, parent_id, title, workspace_id, trashed_at FROM pages WHERE id = ?');
+const getPage = db.prepare('SELECT id, parent_id, title, kind, workspace_id, trashed_at FROM pages WHERE id = ?');
 const subtreeStmt = db.prepare(
   `WITH RECURSIVE sub(id) AS (
      SELECT id FROM pages WHERE id = ?
@@ -71,6 +71,8 @@ function livePage(id, ws, role) {
 // Mueve una página. move = { page_id, parent_id (null = raíz), index?, before_id?, after_id? }
 function moveOne(ws, move) {
   const page = livePage(move.page_id, ws, 'origen');
+  // Las ideas viven fuera del árbol (vista Ideas): no se mueven ni contienen páginas
+  if (page.kind === 'idea') throw new MoveError(`${label(page)} es una idea: las ideas no están en el árbol de páginas`);
   if (move.parent_id === undefined) {
     throw new MoveError('Falta el padre destino (usa null para mover a la raíz del espacio)');
   }
@@ -78,6 +80,7 @@ function moveOne(ws, move) {
 
   if (parentId !== null) {
     const parent = livePage(parentId, ws, 'destino');
+    if (parent.kind === 'idea') throw new MoveError(`${label(parent)} es una idea: no puede contener páginas`);
     if (parent.id === page.id) throw new MoveError(`Una página no puede moverse dentro de sí misma (${label(page)})`);
     const descendants = subtreeStmt.all(page.id).map((r) => r.id);
     if (descendants.includes(parent.id)) {
