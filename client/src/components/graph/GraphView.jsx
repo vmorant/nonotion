@@ -256,6 +256,8 @@ export default function GraphView({ data, settings, onSettings, focusId = null, 
               ? colors.canvas
               : n.kind === 'idea'
                 ? colors.idea
+                : n.kind === 'minutes'
+                  ? colors.success
                 : n.kind === 'issue'
                   ? n.status === 'blocked'
                     ? colors.danger

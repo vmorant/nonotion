@@ -525,3 +525,96 @@ test('listas independientes, plantilla Issues, relaciones de lista y agenda por 
   assert.equal((await call('move_page', { page_id: issId, new_parent_id: null })).isError, false);
   assert.doesNotMatch((await call('list_pages', {})).text, /Issues Beta/);
 });
+
+test('actas: crear, detectar propuestas, proponer con Claude, aprobar (crea y enlaza) y calendario', async () => {
+  const proyecto = await api('/api/pages', { title: 'Proyecto Gamma' });
+  await call('create_tracker', { title: 'To-do Gamma', template: 'todo', parent_id: proyecto.id });
+  await call('create_tracker', { title: 'Bloqueos Gamma', template: 'blockers' });
+  const md = [
+    '## 👥 Asistentes', '- Ana, Luis', '',
+    '## ✅ Acciones',
+    '- [ ] Pedir acceso a Unity Catalog @luis 2030-05-20',
+    '- [ ] Revisar contrato (Ana)',
+    '- [x] Ya hecho',
+    '', '## ⚖️ Decisiones', '- Usamos Databricks', '- Fase 1 en junio',
+    '', '## 💡 Ideas', '- Automatizar las altas',
+    '', '## Riesgos', '- Falta presupuesto de licencias',
+    '', 'Próxima reunión: 15/05/2030',
+  ].join('\n');
+  let r = await call('create_minutes', { title: 'Comité Gamma', date: '2030-05-08', project_id: proyecto.id, attendees: ['Ana', 'Luis'], markdown: md });
+  assert.equal(r.isError, false, r.text);
+  const id = r.text.match(/id: ([A-Za-z0-9_-]+)/)[1];
+  const page = await api(`/api/pages/${id}`);
+  assert.equal(page.kind, 'minutes');
+  assert.equal(page.page_date, '2030-05-08');
+  assert.equal(page.parent_id, null, 'fuera del árbol');
+  assert.doesNotMatch((await call('list_pages', {})).text, /Comité Gamma/);
+  assert.match((await call('list_minutes', {})).text, /2030-05-08 · Comité Gamma .*proyecto «Proyecto Gamma» · Ana, Luis/);
+
+  // detección local (sin IA)
+  const det = await api(`/api/pages/${id}/minutes/detect`, {});
+  const items = det.items.map((i) => `${i.type}:${i.title}:${i.payload.assignee || ''}:${i.payload.date || ''}:${i.payload.tracker_hint || ''}`);
+  assert.ok(items.includes('task:Pedir acceso a Unity Catalog:luis:2030-05-20:todo'), items.join(' | '));
+  assert.ok(items.includes('task:Revisar contrato:Ana::todo'), items.join(' | '));
+  assert.ok(!items.some((x) => x.includes('Ya hecho')), 'las tareas hechas no se proponen');
+  assert.ok(items.includes('idea:Automatizar las altas:::'));
+  assert.ok(items.includes('task:Falta presupuesto de licencias:::blockers'));
+  assert.ok(items.some((x) => x.startsWith('event:Próxima reunión') && x.includes('2030-05-15')));
+  const decisions = det.items.find((i) => i.type === 'doc');
+  assert.match(decisions.title, /Decisiones · Comité Gamma/);
+  assert.match(decisions.details, /- Usamos Databricks\n- Fase 1 en junio/);
+  const again = await api(`/api/pages/${id}/minutes/detect`, {});
+  assert.equal(again.added, 0, 'detectar dos veces no duplica');
+
+  // Claude propone una lista nueva; no se crea nada todavía
+  r = await call('propose_from_minutes', { minutes_id: id, proposals: [{ type: 'list', title: 'Riesgos Gamma', payload: { template: 'blockers' } }] });
+  assert.match(r.text, /1 propuesta/);
+  r = await call('read_page', { page_id: id });
+  assert.match(r.text, /ACTA DE REUNIÓN/);
+  assert.match(r.text, /Lista: Riesgos Gamma — ⏳ pendiente de aprobar/);
+  const before = (await api('/api/trackers')).trackers.length;
+
+  // aprobar: crea y enlaza con el acta
+  const det2 = await api(`/api/pages/${id}/minutes`);
+  const byTitle = (t) => det2.items.find((i) => i.title.startsWith(t));
+  const ok1 = await api(`/api/pages/${id}/minutes/items/${byTitle('Pedir acceso').id}/approve`, {});
+  assert.equal(ok1.status, 'created');
+  const ticket = await api(`/api/pages/${ok1.result_id}/issue`);
+  assert.match(ticket.key, /^TODO-\d+$/, 'la tarea va a la lista To-do adecuada');
+  const fResp = ticket.tracker.config.fields.find((f) => f.name === 'Responsable');
+  const fFecha = ticket.tracker.config.fields.find((f) => f.name === 'Fecha');
+  assert.equal(ticket.values[fResp.id], 'luis');
+  assert.equal(ticket.values[fFecha.id], '2030-05-20');
+  assert.ok(ticket.links.some((l) => l.type === 'origin' && l.target_id === id), 'el ticket "viene de" el acta');
+  const riesgo = await api(`/api/pages/${id}/minutes/items/${byTitle('Falta presupuesto').id}/approve`, {});
+  assert.match((await api(`/api/pages/${riesgo.result_id}/issue`)).key, /^BLQ/, 'el riesgo va a la lista de bloqueos');
+  const idea = await api(`/api/pages/${id}/minutes/items/${byTitle('Automatizar').id}/approve`, {});
+  const ideaPage = await api(`/api/pages/${idea.result_id}`);
+  assert.equal(ideaPage.kind, 'idea');
+  assert.equal(JSON.parse(ideaPage.content).seeds[0].page_id, id);
+  const doc = await api(`/api/pages/${id}/minutes/items/${byTitle('Decisiones').id}/approve`, { title: 'Decisiones del comité Gamma' });
+  const docPage = await api(`/api/pages/${doc.result_id}`);
+  assert.equal(docPage.title, 'Decisiones del comité Gamma', 'se puede ajustar al aprobar');
+  assert.equal(docPage.parent_id, proyecto.id, 'la documentación va al proyecto del acta');
+  const ev = await api(`/api/pages/${id}/minutes/items/${byTitle('Próxima reunión').id}/approve`, {});
+  assert.equal((await api(`/api/pages/${ev.result_id}`)).page_date, '2030-05-15');
+  const lst = await api(`/api/pages/${id}/minutes/items/${byTitle('Riesgos Gamma').id}/approve`, {});
+  assert.equal((await api('/api/trackers')).trackers.length, before + 1);
+  assert.ok((await api(`/api/pages/${lst.result_id}/tracker`)).links.some((l) => l.type === 'origin' && l.target_id === id));
+  // descartar y recuperar
+  const contrato = byTitle('Revisar contrato');
+  await api(`/api/pages/${id}/minutes/items/${contrato.id}/reject`, {});
+  assert.equal((await api(`/api/pages/${id}/minutes`)).items.find((i) => i.id === contrato.id).status, 'rejected');
+  await api(`/api/pages/${id}/minutes/items/${contrato.id}/reopen`, {});
+  // no se aprueba dos veces
+  const twice = await fetch(`${BASE}/api/pages/${id}/minutes/items/${byTitle('Pedir acceso').id}/approve`, { method: 'POST', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }, body: '{}' });
+  assert.equal(twice.status, 400);
+
+  // el acta ve lo creado; calendario con su tipo
+  assert.ok((await api(`/api/pages/${id}/issues`)).linked.length >= 2, 'tickets y lista que vienen del acta');
+  const cal = await api('/api/calendar?from=2030-05-01&to=2030-05-31');
+  assert.ok(cal.dated.some((p) => p.id === id && p.kind === 'minutes'), 'el acta sale en el calendario como acta');
+  assert.ok(cal.dated.some((p) => p.id === ev.result_id && p.kind === 'doc'), 'y el evento creado');
+  assert.match((await call('read_page', { page_id: id })).text, /Tarea: Pedir acceso a Unity Catalog \(responsable luis, fecha 2030-05-20\) — ✅ creada → «Pedir acceso a Unity Catalog»/);
+  assert.match((await call('move_page', { page_id: id, new_parent_id: proyecto.id })).text, /es un acta/);
+});

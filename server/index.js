@@ -49,6 +49,8 @@ import {
   calendarIssueDates,
 } from './issues.js';
 
+import { mountMinutes, minutesDetail, minutesHeaderMarkdown, minutesItemsMarkdown } from './minutes.js';
+
 // Páginas a las que apunta un contenido, sea documento, canvas o idea
 const pageLinks = (content) => (parseIdea(content) ? ideaLinkedPageIds(content) : linkedPageIds(content));
 
@@ -559,6 +561,7 @@ app.post('/api/pages/:id/duplicate', (req, res) => {
   if (!orig) return res.status(404).json({ error: 'Página no encontrada' });
   if (orig.kind === 'issue') return res.status(400).json({ error: 'Un ticket no se duplica: crea uno nuevo y relaciónalo' });
   if (orig.kind === 'tracker') return res.status(400).json({ error: 'Una lista de seguimiento no se duplica: crea una nueva con la misma plantilla' });
+  if (orig.kind === 'minutes') return res.status(400).json({ error: 'Un acta no se duplica: crea una nueva' });
 
   const insertPage = db.prepare(
     `INSERT INTO pages (id, parent_id, title, icon, content, content_text, position, workspace_id, kind)
@@ -790,7 +793,7 @@ app.get('/api/calendar', (req, res) => {
   if (!from || !to) return res.status(400).json({ error: 'Parámetros from/to inválidos (YYYY-MM-DD)' });
   const dated = db
     .prepare(
-      `SELECT id, title, icon, page_date AS day FROM pages
+      `SELECT id, title, icon, kind, page_date AS day FROM pages
        WHERE trashed_at IS NULL AND workspace_id = ? AND page_date BETWEEN ? AND ?`
     )
     .all(req.ws, from, to);
@@ -837,16 +840,12 @@ function getOrCreateInbox(ws) {
   return id;
 }
 
-app.post('/api/capture', async (req, res) => {
-  const { markdown, title, parent_id, page_date, icon, tags } = req.body || {};
-  if (typeof markdown !== 'string' || !markdown.trim()) {
-    return res.status(400).json({ error: 'Falta el campo "markdown"' });
-  }
-  let parentId = parent_id || null;
-  if (parentId && !liveParentInWs(parentId, req.ws)) {
-    return res.status(400).json({ error: 'Padre inexistente' });
-  }
-  if (!parentId) parentId = getOrCreateInbox(req.ws);
+// Crea una página desde Markdown. kind = 'minutes' (acta): sin padre (vive en
+// su propia sección). El resto, bajo su padre o en el Inbox.
+async function createMarkdownPage(req, { markdown, title, parent_id, page_date, icon, tags, kind = 'doc' }) {
+  let parentId = kind === 'minutes' ? null : parent_id || null;
+  if (parentId && !liveParentInWs(parentId, req.ws)) throw Object.assign(new Error('Padre inexistente'), { status: 400 });
+  if (!parentId && kind !== 'minutes') parentId = getOrCreateInbox(req.ws);
 
   // Se guarda ya como documento (igual que si se hubiera pegado en el editor)
   let content = markdown;
@@ -865,12 +864,49 @@ app.post('/api/capture', async (req, res) => {
     .prepare('SELECT COALESCE(MAX(position) + 1, 0) AS p FROM pages WHERE parent_id IS ?')
     .get(parentId).p;
   db.prepare(
-    'INSERT INTO pages (id, parent_id, title, icon, content, content_text, position, page_date, workspace_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)'
-  ).run(id, parentId, pageTitle, typeof icon === 'string' && icon ? icon : '🤖', content, text, pos, validDate(page_date), req.ws);
+    'INSERT INTO pages (id, parent_id, title, icon, content, content_text, position, page_date, workspace_id, kind) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
+  ).run(id, parentId, pageTitle, typeof icon === 'string' && icon ? icon : '🤖', content, text, pos, validDate(page_date), req.ws, kind);
   ftsUpsert(id, pageTitle, text);
   const pageTags = Array.isArray(tags) && tags.length ? setPageTags(id, req.ws, tags) : [];
-  notifyTree(req);
-  res.json({ id, title: pageTitle, url: `/p/${id}`, tags: pageTags });
+  logActivity(id);
+  return { id, title: pageTitle, url: `/p/${id}`, tags: pageTags };
+}
+
+app.post('/api/capture', async (req, res) => {
+  const { markdown } = req.body || {};
+  if (typeof markdown !== 'string' || !markdown.trim()) {
+    return res.status(400).json({ error: 'Falta el campo "markdown"' });
+  }
+  try {
+    const r = await createMarkdownPage(req, req.body);
+    notifyTree(req);
+    res.json(r);
+  } catch (e) {
+    if (e.status === 400) return res.status(400).json({ error: e.message });
+    console.error('captura:', e);
+    res.status(500).json({ error: 'No se pudo crear la página' });
+  }
+});
+
+// Idea nueva (desde un acta): semillas ya preparadas
+function createIdeaPage(req, { title, seeds, summary = '' }) {
+  const c = normalizeIdea({ type: 'idea', summary, seeds });
+  const id = nanoid(12);
+  const text = ideaText(c);
+  const pageTitle = (title || '').trim() || ideaTitleFrom(summary || seeds?.[0]?.text, 'Idea');
+  db.prepare(
+    `INSERT INTO pages (id, parent_id, title, icon, content, content_text, position, workspace_id, kind) VALUES (?, NULL, ?, '💡', ?, ?, 0, ?, 'idea')`
+  ).run(id, pageTitle, JSON.stringify(c), text, req.ws);
+  ftsUpsert(id, pageTitle, text);
+  return { id, title: pageTitle };
+}
+
+mountMinutes(app, {
+  notifyTree,
+  notifyPage,
+  createMarkdownPage,
+  createIdeaPage,
+  toMarkdown: async (id) => docToMarkdown(db.prepare('SELECT content FROM pages WHERE id = ?').get(id)?.content || ''),
 });
 
 // ---------- Lectura/escritura en Markdown (usada por el MCP) ----------
@@ -1737,7 +1773,7 @@ app.get('/api/export', async (req, res) => {
   const canvases = []; // se escriben al final, cuando ya se conocen todas las rutas
 
   const addPages = async (parentId, dir, depth) => {
-    const kids = (childrenMap.get(parentId) || []).filter((p) => p.kind !== 'idea' && p.kind !== 'issue');
+    const kids = (childrenMap.get(parentId) || []).filter((p) => !['idea', 'issue', 'minutes'].includes(p.kind));
     const usedNames = new Set();
     for (const page of kids) {
       let base = sanitizeName(page.title);
@@ -1842,6 +1878,20 @@ app.get('/api/export', async (req, res) => {
       }).join('\n') + '\n';
     }
     archive.append(md, { name: `Ideas/${candidate}.md` });
+  }
+
+  // Actas: su texto, cabecera (fecha, proyecto, asistentes) y propuestas
+  const minutesNames = new Set();
+  for (const page of pages.filter((p) => p.kind === 'minutes')) {
+    const d = minutesDetail(page.id);
+    if (!d) continue;
+    let name = sanitizeName(`${d.date || ''} ${page.title || ''}`.trim());
+    while (minutesNames.has(name.toLowerCase())) name += '_';
+    minutesNames.add(name.toLowerCase());
+    const body = await docToMarkdown(page.content);
+    archive.append(`# ${page.icon ? page.icon + ' ' : ''}${page.title}\n\n${minutesHeaderMarkdown(d)}\n\n${body}\n\n## Propuestas\n\n${minutesItemsMarkdown(d)}\n`, {
+      name: `Actas/${name}.md`,
+    });
   }
 
   // Canvas en formato JSON Canvas (.canvas), como Obsidian: las páginas y los

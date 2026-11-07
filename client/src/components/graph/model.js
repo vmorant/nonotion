@@ -66,7 +66,7 @@ export function buildGraph(data, settings, { focusId = null } = {}) {
   const shownIds = new Set(pagesShown.map((p) => p.id));
   let nodes = pagesShown.map((p) => ({
     id: p.id,
-    kind: p.kind === 'canvas' ? 'canvas' : p.kind === 'idea' ? 'idea' : p.kind === 'issue' ? 'issue' : 'page',
+    kind: p.kind === 'canvas' ? 'canvas' : p.kind === 'idea' ? 'idea' : p.kind === 'issue' ? 'issue' : p.kind === 'minutes' ? 'minutes' : 'page',
     status: p.status,
     key: p.key,
     label: p.key ? `${p.key} ${p.title || 'Sin título'}` : p.title || 'Sin título',

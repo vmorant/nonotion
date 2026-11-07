@@ -37,7 +37,7 @@ export default function MoveDialog({ page, pages, onMove, onClose }) {
     };
     // Solo páginas que admiten contenido dentro (no ideas, listas ni tickets)
     const list = pages
-      .filter((p) => !excluded.has(p.id) && !['idea', 'issue', 'tracker'].includes(p.kind))
+      .filter((p) => !excluded.has(p.id) && !['idea', 'issue', 'tracker', 'minutes'].includes(p.kind))
       .map((p) => ({ id: p.id, icon: p.icon || '📄', path: pathOf(p), current: p.id === page.parent_id }));
     list.sort((a, b) => a.path.localeCompare(b.path, 'es'));
     const root = page.kind === 'tracker' ? 'Sin página (lista independiente, solo en Seguimiento)' : 'Raíz del espacio';
