@@ -288,6 +288,13 @@ export function logActivity(pageId) {
 }
 
 export function ftsUpsert(pageId, title, body) {
+  // Elementos de seguimiento: su clave (AXA-12) también se busca
+  try {
+    const k = db
+      .prepare('SELECT i.number, t.prefix AS p FROM issues i JOIN trackers t ON t.page_id = i.tracker_id WHERE i.page_id = ?')
+      .get(pageId);
+    if (k?.p && !String(title || '').startsWith(`${k.p}-${k.number} `)) title = `${k.p}-${k.number} ${title || ''}`;
+  } catch {} // antes de crear la tabla de elementos
   db.prepare('DELETE FROM pages_fts WHERE page_id = ?').run(pageId);
   db.prepare('INSERT INTO pages_fts (page_id, title, body) VALUES (?, ?, ?)').run(pageId, title, body);
 }

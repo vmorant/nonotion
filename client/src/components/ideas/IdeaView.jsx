@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import MarkdownIt from 'markdown-it';
-import { Sparkles, Plus, Trash2, Upload, Copy, Check, ExternalLink, FileText, LayoutDashboard, CalendarDays, Pencil } from 'lucide-react';
+import { Sparkles, Plus, Trash2, Upload, Copy, Check, ExternalLink, FileText, LayoutDashboard, CalendarDays, Pencil, ListChecks } from 'lucide-react';
+import NewIssueDialog from '../issues/NewIssueDialog.jsx';
 import { api, markBusy, clearBusy } from '../../api.js';
 import { viewFile, safeHref } from '../../fileLinks.js';
 import {
@@ -257,6 +258,7 @@ export default function IdeaView({ pageId, title, initialContent, pages = [], fi
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(null);
   const [dragOver, setDragOver] = useState(false);
+  const [issueOpen, setIssueOpen] = useState(false); // "Crear elemento" desde la idea
   const fileInput = useRef(null);
   const summaryTimer = useRef(null);
 
@@ -702,6 +704,9 @@ export default function IdeaView({ pageId, title, initialContent, pages = [], fi
                 <button className="btn" onClick={() => createOutcome('plan')} disabled={busy} title="Crea una página de planificación con hitos y tareas, fijada a hoy en el calendario">
                   <CalendarDays {...ICON} /> Crear planning
                 </button>
+                <button className="btn" onClick={() => setIssueOpen(true)} disabled={busy} title="Convierte la idea en un ticket de una lista de seguimiento, enlazado a ella">
+                  <ListChecks {...ICON} /> Crear ticket
+                </button>
               </div>
               <div className="idea-create-row">
                 <button
@@ -766,6 +771,20 @@ export default function IdeaView({ pageId, title, initialContent, pages = [], fi
           )}
         </section>
       </div>
+      {issueOpen && (
+        <NewIssueDialog
+          initial={{ title: summary || title || '', description: summary ? `Sale de la idea «${title}».` : '', extra: { from_idea_id: pageId } }}
+          onClose={() => setIssueOpen(false)}
+          onCreate={async (body) => {
+            await api.createIssue(body);
+            setIssueOpen(false);
+            // el servidor ya registró el resultado en la idea: se relee
+            const p = await api.page(pageId);
+            setIdea(parseIdea(p.content));
+            onTreeChanged?.();
+          }}
+        />
+      )}
     </div>
   );
 }

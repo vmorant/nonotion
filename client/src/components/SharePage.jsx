@@ -7,6 +7,8 @@ import FileViewer, { previewKind } from './FileViewer.jsx';
 import { fileFromHref } from '../fileLinks.js';
 import CanvasView from './canvas/CanvasView.jsx';
 import IdeaView from './ideas/IdeaView.jsx';
+import { StatusPill } from './issues/fields.jsx';
+import TrackerView from './issues/TrackerView.jsx';
 
 export default function SharePage() {
   const { token } = useParams();
@@ -26,7 +28,7 @@ export default function SharePage() {
   }, [token]);
 
   // un canvas no pasa por el editor de texto
-  const content = page?.kind === 'canvas' || page?.kind === 'idea' ? '' : parseContent(page?.content);
+  const content = page?.kind === 'canvas' || page?.kind === 'idea' || page?.kind === 'tracker' ? '' : parseContent(page?.content);
 
   const editor = useEditor(
     {
@@ -58,7 +60,20 @@ export default function SharePage() {
           <span className="page-icon">{page.icon || '📄'}</span>
           <h1 className="page-title-static">{page.title || 'Sin título'}</h1>
         </div>
-        {page.kind === 'idea' ? (
+        {page.issue && (
+          <div className="issue-fields readonly">
+            <span className="issue-key big">{page.issue.key}</span>
+            <StatusPill status={{ name: page.issue.status, color: page.issue.color, category: page.issue.category }} />
+            {page.issue.fields.map((f) => (
+              <span key={f.name}>
+                {f.name}: <strong>{f.value}</strong>
+              </span>
+            ))}
+          </div>
+        )}
+        {page.kind === 'tracker' && page.tracker ? (
+          <TrackerView pageId={`share-${token}`} readOnly initial={{ id: page.id, prefix: page.tracker.prefix, config: page.tracker.config, issues: page.tracker.issues }} />
+        ) : page.kind === 'idea' ? (
           <IdeaView pageId={page.id} title={page.title} initialContent={page.content} files={page.files || []} readOnly />
         ) : page.kind === 'canvas' ? (
           <CanvasView pageId={`share-${token}`} initialContent={page.content} readOnly />

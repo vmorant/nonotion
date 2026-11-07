@@ -26,8 +26,8 @@ export const STEP_LABELS = {
   discarded: 'Descartado',
   outline: 'Esquema',
 };
-export const OUTCOME_TYPES = ['page', 'canvas', 'plan', 'file', 'external'];
-export const OUTCOME_LABELS = { page: 'Página', canvas: 'Canvas', plan: 'Planning', file: 'Archivo', external: 'Externo' };
+export const OUTCOME_TYPES = ['page', 'canvas', 'plan', 'issue', 'file', 'external'];
+export const OUTCOME_LABELS = { page: 'Página', canvas: 'Canvas', plan: 'Planning', issue: 'Elemento', file: 'Archivo', external: 'Externo' };
 export const EMPTY_IDEA = { type: 'idea', status: 'seed', summary: '', seeds: [], steps: [], outcomes: [] };
 
 const MAX_ITEMS = 2000;
@@ -96,7 +96,7 @@ function normalizeOutcome(o, i) {
   const out = { id: str(o.id, 64) || newId(), at: stamp(o.at), type: o.type };
   if (o.label !== undefined) out.label = str(o.label, 300);
   if (o.note !== undefined) out.note = str(o.note, 5000);
-  if (o.type === 'page' || o.type === 'canvas' || o.type === 'plan') {
+  if (o.type === 'page' || o.type === 'canvas' || o.type === 'plan' || o.type === 'issue') {
     if (!ID_RE.test(o.page_id || '')) throw new IdeaError(`Resultado ${i + 1}: falta page_id`);
     out.page_id = o.page_id;
   } else if (o.type === 'file') {

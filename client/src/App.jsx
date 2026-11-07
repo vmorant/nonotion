@@ -23,6 +23,7 @@ import { LogoMark, Wordmark } from './components/Logo.jsx';
 import { PanelLeftOpen } from 'lucide-react';
 import GraphPage from './components/graph/GraphPage.jsx';
 import IdeasView from './components/ideas/IdeasView.jsx';
+import IssuesView from './components/issues/IssuesView.jsx';
 
 export default function App() {
   const [pages, setPages] = useState([]);
@@ -40,6 +41,7 @@ export default function App() {
   const [ws, setWs] = useState(null); // espacio actual
   const [wsSettings, setWsSettings] = useState(false);
   const [wsNew, setWsNew] = useState(false); // diálogo de nuevo espacio
+  const [members, setMembers] = useState([]); // responsables sugeridos en Seguimiento
   const wsRef = useRef(null); // espacio actual, también para la cabecera X-Workspace de api.js
   const wantedWsRef = useRef(null); // espacio de una página abierta antes de cargar la lista
   const navigate = useNavigate();
@@ -123,6 +125,19 @@ export default function App() {
     if (ws) refreshTree();
   }, [ws, refreshTree]);
 
+  // Personas del espacio (propietarios y miembros de GitHub) para sugerir responsables
+  useEffect(() => {
+    if (!ws) return;
+    let cancelled = false;
+    api
+      .members(ws)
+      .then((m) => !cancelled && setMembers([...new Set([...(m.owners || []), ...(m.members || []).map((x) => x.github_login)])]))
+      .catch(() => !cancelled && setMembers([]));
+    return () => {
+      cancelled = true;
+    };
+  }, [ws]);
+
   // Si hay cambios sin confirmar o subidas en curso, el navegador avisa antes
   // de cerrar o recargar la pestaña
   useEffect(() => {
@@ -181,6 +196,13 @@ export default function App() {
   }, []);
 
   const createPage = async (parentId = null, kind = 'doc') => {
+    if (kind === 'tracker') {
+      // lista de seguimiento: plantilla de bloqueos (se cambia en ⚙ Campos)
+      const t = await api.createTracker({ parent_id: parentId, template: 'blockers', title: 'Seguimiento' });
+      await refreshTree();
+      navigate(`/p/${t.id}`);
+      return;
+    }
     const page = await api.createPage({ parent_id: parentId, ...(kind === 'canvas' ? { kind, icon: '🧩', title: 'Canvas' } : {}) });
     await refreshTree();
     navigate(`/p/${page.id}`);
@@ -258,6 +280,7 @@ export default function App() {
                 onFavorite={setFavorite}
                 onWorkspaceSeen={onWorkspaceSeen}
                 allTags={tags}
+                members={members}
               />
             }
           />
@@ -265,6 +288,7 @@ export default function App() {
           <Route path="/calendar" element={<CalendarView />} />
           <Route path="/graph" element={<GraphPage pages={pages} />} />
           <Route path="/ideas" element={<IdeasView pages={pages} onChanged={refreshTree} />} />
+          <Route path="/issues" element={<IssuesView pages={pages} onChanged={refreshTree} />} />
           <Route
             path="*"
             element={

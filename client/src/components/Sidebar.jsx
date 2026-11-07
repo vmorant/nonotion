@@ -19,6 +19,7 @@ import {
   LayoutDashboard,
   Waypoints,
   Lightbulb,
+  ListChecks,
 } from 'lucide-react';
 
 function TreeItem({ page, index, childrenMap, depth, onCreate, onDelete, onDuplicate, onMove, onFavorite, onMoveTo }) {
@@ -88,7 +89,7 @@ function TreeItem({ page, index, childrenMap, depth, onCreate, onDelete, onDupli
             <span className="tree-dot" />
           )}
         </button>
-        <span className="tree-icon">{page.icon || (page.kind === 'canvas' ? '🧩' : '📄')}</span>
+        <span className="tree-icon">{page.icon || (page.kind === 'canvas' ? '🧩' : page.kind === 'tracker' ? '📋' : '📄')}</span>
         <span className="tree-title">{page.title || 'Sin título'}</span>
         {page.shared ? (
           <span className="tree-shared" title="Compartida públicamente">
@@ -96,6 +97,7 @@ function TreeItem({ page, index, childrenMap, depth, onCreate, onDelete, onDupli
           </span>
         ) : null}
         <span className="tree-actions" onClick={(e) => e.preventDefault()}>
+          {page.kind !== 'tracker' && (
           <button
             title="Añadir subpágina"
             onClick={(e) => {
@@ -105,6 +107,7 @@ function TreeItem({ page, index, childrenMap, depth, onCreate, onDelete, onDupli
           >
             <Plus size={14} />
           </button>
+          )}
           <button
             title="Más opciones"
             onClick={(e) => {
@@ -126,22 +129,36 @@ function TreeItem({ page, index, childrenMap, depth, onCreate, onDelete, onDupli
           >
             Abrir
           </button>
+          {page.kind !== 'tracker' && (
           <button
-            onClick={() => {
-              setMenuOpen(false);
-              onCreate(page.id);
-            }}
-          >
-            Añadir subpágina
-          </button>
+              onClick={() => {
+                setMenuOpen(false);
+                onCreate(page.id);
+              }}
+            >
+              Añadir subpágina
+            </button>
+          )}
+          {page.kind !== 'tracker' && (
           <button
-            onClick={() => {
-              setMenuOpen(false);
-              onCreate(page.id, 'canvas');
-            }}
-          >
-            Añadir canvas dentro
-          </button>
+              onClick={() => {
+                setMenuOpen(false);
+                onCreate(page.id, 'canvas');
+              }}
+            >
+              Añadir canvas dentro
+            </button>
+          )}
+          {page.kind !== 'tracker' && (
+          <button
+              onClick={() => {
+                setMenuOpen(false);
+                onCreate(page.id, 'tracker');
+              }}
+            >
+              Añadir lista de seguimiento dentro
+            </button>
+          )}
           <button
             onClick={() => {
               setMenuOpen(false);
@@ -236,7 +253,9 @@ function QuickSection({ name, title, items, byId }) {
               title={parent ? `${parent.title || 'Sin título'} / ${p.title || 'Sin título'}` : p.title}
             >
               <span className="tree-icon">{p.icon || (p.kind === 'canvas' ? '🧩' : '📄')}</span>
-              <span className="tree-title">{p.title || 'Sin título'}</span>
+              <span className="tree-title">
+                {p.issue_key && <span className="issue-key small">{p.issue_key}</span>} {p.title || 'Sin título'}
+              </span>
               {parent && <span className="quick-parent">{parent.title || 'Sin título'}</span>}
             </NavLink>
           );
@@ -328,9 +347,11 @@ export default function Sidebar({
 
   // Las ideas viven en su propia vista, no en el árbol
   const ideasCount = pages.filter((p) => p.kind === 'idea').length;
+  const activeIssues = pages.filter((p) => p.kind === 'issue' && ['todo', 'doing', 'blocked'].includes(p.issue_status));
+  const blockedIssues = activeIssues.filter((p) => p.issue_status === 'blocked').length;
   const childrenMap = new Map();
   for (const p of pages) {
-    if (p.kind === 'idea') continue;
+    if (p.kind === 'idea' || p.kind === 'issue') continue; // viven en sus propias vistas (los tickets, dentro de su lista)
     const key = p.parent_id || null;
     if (!childrenMap.has(key)) childrenMap.set(key, []);
     childrenMap.get(key).push(p);
@@ -405,6 +426,14 @@ export default function Sidebar({
       <div className="sidebar-tools">
         <NavLink to="/calendar" className={({ isActive }) => 'sidebar-tool-link' + (isActive ? ' active' : '')}>
           <CalendarDays size={16} strokeWidth={1.8} /> Calendario
+        </NavLink>
+        <NavLink to="/issues" className={({ isActive }) => 'sidebar-tool-link' + (isActive ? ' active' : '')}>
+          <ListChecks size={16} strokeWidth={1.8} /> Seguimiento
+          {activeIssues.length > 0 && (
+            <span className={'sidebar-count' + (blockedIssues ? ' danger' : '')} title={blockedIssues ? `${blockedIssues} bloqueado(s)` : 'Activos'}>
+              {activeIssues.length}
+            </span>
+          )}
         </NavLink>
         <NavLink to="/ideas" className={({ isActive }) => 'sidebar-tool-link' + (isActive ? ' active' : '')}>
           <Lightbulb size={16} strokeWidth={1.8} /> Ideas

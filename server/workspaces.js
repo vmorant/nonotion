@@ -223,7 +223,7 @@ export function liveParentInWs(pageId, ws) {
   return Boolean(
     pageId &&
       db
-        .prepare(`SELECT 1 FROM pages WHERE id = ? AND workspace_id = ? AND trashed_at IS NULL AND kind != 'idea'`)
+        .prepare(`SELECT 1 FROM pages WHERE id = ? AND workspace_id = ? AND trashed_at IS NULL AND kind NOT IN ('idea', 'issue', 'tracker')`)
         .get(pageId, ws)
   );
 }

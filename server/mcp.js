@@ -12,6 +12,7 @@ import db, { DATA_DIR } from './db.js';
 import { lookupToken } from './workspaces.js';
 import { normalizeTag } from './tags.js';
 import { markdownToDoc } from './markdown.js';
+import { issueHeaderMarkdown, issueRelationsMarkdown, issueTimelineMarkdown } from './issues.js';
 
 const TEXT_LIMIT = 200 * 1024; // 200 KB para adjuntos de texto
 const IMAGE_LIMIT = 4 * 1024 * 1024; // 4 MB para imágenes
@@ -158,10 +159,14 @@ export function mountMcp(app, port) {
         try {
           const all = await (await api('/api/pages')).json();
           const ideas = all.filter((p) => p.kind === 'idea');
-          const pages = all.filter((p) => p.kind !== 'idea');
+          const issues = all.filter((p) => p.kind === 'issue');
+          const trackersN = all.filter((p) => p.kind === 'tracker').length;
+          const pages = all.filter((p) => p.kind !== 'idea' && p.kind !== 'issue');
           const ws = (await (await api('/api/workspaces')).json()).workspaces?.[0];
           let head = ws ? `Espacio: ${ws.icon || ''} ${ws.name} (este conector solo ve este espacio)\n` : '';
-          head += ideas.length ? `Ideas en desarrollo (fuera del árbol): ${ideas.length} → list_ideas\n\n` : '\n';
+          head += ideas.length ? `Ideas en desarrollo (fuera del árbol): ${ideas.length} → list_ideas\n` : '';
+          head += trackersN ? `Listas de seguimiento: ${trackersN} (marcadas en el árbol) con ${issues.length} ticket(s) → list_trackers / list_issues\n` : '';
+          head += '\n';
           if (!pages.length) return ok(head + 'No hay páginas todavía.');
           const children = new Map();
           for (const p of pages) {
@@ -173,7 +178,7 @@ export function mountMcp(app, port) {
           const walk = (parentId, depth) => {
             for (const p of children.get(parentId) || []) {
               lines.push(
-                `${'  '.repeat(depth)}- ${p.icon || '📄'} ${p.title || 'Sin título'} (id: ${p.id}${p.kind === 'canvas' ? ', canvas' : ''}${p.page_date ? `, fecha: ${p.page_date}` : ''})${p.tags?.length ? ` [${p.tags.map((t) => '#' + t).join(' ')}]` : ''}`
+                `${'  '.repeat(depth)}- ${p.icon || '📄'} ${p.title || 'Sin título'} (id: ${p.id}${p.kind === 'canvas' ? ', canvas' : p.kind === 'tracker' ? ', lista de seguimiento' : ''}${p.page_date ? `, fecha: ${p.page_date}` : ''})${p.tags?.length ? ` [${p.tags.map((t) => '#' + t).join(' ')}]` : ''}`
               );
               walk(p.id, depth + 1);
             }
@@ -202,8 +207,18 @@ export function mountMcp(app, port) {
           out += p.tags?.length ? `Etiquetas: ${p.tags.map((t) => '#' + t).join(' ')}\n\n` : '\n';
           if (p.kind === 'canvas') out += '(Esta página es un CANVAS: edítala con update_canvas, no con append/edit/update_page)\n\n';
           if (p.kind === 'idea') out += '(Esta página es una IDEA: trabájala con develop_idea y materialize_idea, no con append/edit/update_page)\n\n';
+          if (p.kind === 'tracker') out += '(Esta página es una LISTA DE SEGUIMIENTO: crea tickets con create_issue, configúrala con update_tracker)\n\n';
+          let issue = null;
+          if (p.kind === 'issue') {
+            issue = await (await api(`/api/pages/${page_id}/issue`)).json();
+            out +=
+              `(Esta página es un TICKET DE SEGUIMIENTO: cambia estado y campos o comenta con update_issue, relaciónalo con link_issue; la descripción es Markdown normal y admite append/edit/update_page)\n\n` +
+              issueHeaderMarkdown(issue) +
+              '\n\n## Descripción\n\n';
+          }
           out += p.markdown || '(página vacía)';
           if (p.kind === 'canvas') out += `\n\n---\nJSON Canvas:\n\`\`\`json\n${JSON.stringify(p.canvas)}\n\`\`\``;
+          if (issue) out += `\n\n## Relaciones\n\n${issueRelationsMarkdown(issue)}\n\n## Cronología\n\n${issueTimelineMarkdown(issue)}`;
           if (p.files?.length) {
             out +=
               '\n\n---\nAdjuntos:\n' +
@@ -590,7 +605,7 @@ export function mountMcp(app, port) {
     });
     const outcomeSchema = z.object({
       type: z
-        .enum(['page', 'canvas', 'plan', 'file', 'external'])
+        .enum(['page', 'canvas', 'plan', 'issue', 'file', 'external'])
         .describe('page: página de NoNotion; canvas: diagrama/mapa (create_canvas); plan: página de planificación (tareas, hitos, fechas); file: archivo adjunto (attach_file: Word, Excel…); external: documento fuera de NoNotion (Google Docs, etc.)'),
       page_id: z.string().optional().describe('Id de la página/canvas/plan creado (page, canvas, plan)'),
       file_id: z.string().optional().describe('file_id del adjunto (file)'),
@@ -714,7 +729,7 @@ export function mountMcp(app, port) {
           const page = await (await api(`/api/pages/${page_id}`)).json();
           if (page.kind !== 'idea') return fail(new Error('Esa página no es una idea (list_ideas las lista)'));
           for (const o of outcomes) {
-            if (['page', 'canvas', 'plan'].includes(o.type) && !o.page_id) return fail(new Error(`Resultado "${o.type}": falta page_id`));
+            if (['page', 'canvas', 'plan', 'issue'].includes(o.type) && !o.page_id) return fail(new Error(`Resultado "${o.type}": falta page_id`));
             if (o.type === 'file' && !o.file_id) return fail(new Error('Resultado "file": falta file_id'));
             if (o.type === 'external' && !o.url) return fail(new Error('Resultado "external": falta url'));
           }
@@ -725,6 +740,274 @@ export function mountMcp(app, port) {
             `Idea "${r.title}" materializada (${r.idea.status}): ${r.idea.outcomes.length} resultado(s) en total:\n` +
               r.idea.outcomes.map((o) => `- ${o.type}${o.label ? ` «${o.label}»` : ''}: ${o.page_id ? `/p/${o.page_id}` : o.url || o.file_id}`).join('\n')
           );
+        } catch (e) {
+          return fail(e);
+        }
+      }
+    );
+
+    // ---------- Seguimiento: listas (trackers) y tickets, como un Jira ligero ----------
+    const issueRef = z.string().describe('Clave del ticket (p. ej. "BLQ-12") o su id de página');
+    const trackerRef = z.string().describe('Lista: su id, su prefijo (BLQ) o su título');
+    const resolveIssue = async (ref) => {
+      const s = String(ref || '').trim();
+      if (/^[A-Za-z][A-Za-z0-9]{0,9}-\d+$/.test(s)) {
+        const r = await (await api(`/api/issues?key=${encodeURIComponent(s)}`)).json();
+        if (!r.issues.length) throw new Error(`No hay ningún ticket ${s} en este espacio`);
+        return r.issues[0].id;
+      }
+      return s;
+    };
+    const resolveTracker = async (ref) => {
+      const s = String(ref || '').trim();
+      const { trackers } = await (await api('/api/trackers')).json();
+      const fold = (x) => String(x || '').normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase().trim();
+      const t = trackers.find((x) => x.id === s || x.prefix === s.toUpperCase()) || trackers.find((x) => fold(x.title) === fold(s));
+      if (!t) throw new Error(`No hay ninguna lista "${s}". Listas: ${trackers.map((x) => `${x.title} (${x.prefix})`).join(', ') || 'ninguna (créala con create_tracker)'}`);
+      return t;
+    };
+    const linkSchema = z.object({
+      type: z
+        .enum(['blocks', 'relates', 'documents', 'origin'])
+        .describe('blocks = este ticket bloquea a otro ticket; relates = relacionado; documents = documentado en una página; origin = viene de (idea, acta de reunión, página)'),
+      target: z.string().describe('Id de la página o clave del ticket destino (BLQ-7)'),
+    });
+    const fieldsSchema = z
+      .record(z.string(), z.any())
+      .optional()
+      .describe('Valores por NOMBRE de campo de la lista: {"Responsable": "vmorant", "Impacto": "Alto", "Fecha límite": "2026-11-20"}. Desplegables por nombre de opción; varias opciones como lista; null para vaciar. Mira los campos con list_trackers');
+    const CAT = { todo: 'pendiente', doing: 'en curso', blocked: 'bloqueado', done: 'hecho' };
+    const issueLine = (i, fieldsOf) => {
+      const extra = (fieldsOf(i.tracker_id) || [])
+        .filter((f) => i.values[f.id] != null && !(Array.isArray(i.values[f.id]) && !i.values[f.id].length))
+        .map((f) => `${f.name}: ${f.type === 'select' ? f.options.find((o) => o.id === i.values[f.id])?.name : f.type === 'multi' ? i.values[f.id].map((x) => f.options.find((o) => o.id === x)?.name).join('/') : f.type === 'checkbox' ? (i.values[f.id] ? 'sí' : 'no') : i.values[f.id]}`);
+      return `- ${i.key} ${i.title} · ${i.status_name}${extra.length ? ` · ${extra.join(' · ')}` : ''}${i.blocked_by_open ? ` · ⛔ bloqueado por ${i.blocked_by_open}` : ''} (id: ${i.id})`;
+    };
+
+    server.registerTool(
+      'list_trackers',
+      {
+        title: 'Listar listas de seguimiento',
+        description:
+          'Devuelve las listas de seguimiento del espacio (p. ej. "Bloqueantes", "To-do", "Temas"): prefijo de sus tickets, estados y campos con sus opciones, y cuántos tickets hay por estado. Úsala antes de crear o filtrar tickets para saber qué lista y qué campos usar.',
+        inputSchema: {},
+      },
+      async () => {
+        try {
+          const { trackers, templates } = await (await api('/api/trackers')).json();
+          if (!trackers.length) {
+            return ok(`No hay listas todavía. Plantillas para create_tracker: ${templates.map((t) => `${t.id} (${t.label})`).join(', ')}.`);
+          }
+          return ok(
+            trackers
+              .map((t) =>
+                [
+                  `## ${t.icon || '📋'} ${t.title} — prefijo ${t.prefix} (id: ${t.id})`,
+                  `Tickets: ${Object.entries(t.counts).filter(([, n]) => n).map(([c, n]) => `${n} ${CAT[c]}`).join(', ') || 'ninguno'}`,
+                  `Estados: ${t.config.statuses.map((s) => `${s.name} (${CAT[s.category]})`).join(', ')}`,
+                  `Campos: ${t.config.fields.map((f) => `${f.name} [${f.type}${f.options ? `: ${f.options.map((o) => o.name).join(', ') || '—'}` : ''}]`).join('; ') || 'solo título y estado'}`,
+                ].join('\n')
+              )
+              .join('\n\n')
+          );
+        } catch (e) {
+          return fail(e);
+        }
+      }
+    );
+
+    server.registerTool(
+      'create_tracker',
+      {
+        title: 'Crear lista de seguimiento',
+        description:
+          'Crea una lista de seguimiento (página del árbol con tickets, como un tablero de Jira ligero) a partir de una plantilla: blockers (bloqueos e impedimentos), todo (tareas), topics (temas y decisiones) o blank. Úsala solo cuando el usuario lo pida; elige el padre temático (p. ej. la página del proyecto).',
+        inputSchema: {
+          title: z.string().describe('Nombre de la lista, p. ej. "Bloqueantes AXA"'),
+          template: z.enum(['blockers', 'todo', 'topics', 'blank']).optional().describe('Por defecto blank'),
+          parent_id: z.string().optional().describe('Página bajo la que va (sin él, en la raíz)'),
+          prefix: z.string().optional().describe('Prefijo de las claves (letras y números, p. ej. BLQ); por defecto el de la plantilla o derivado del título'),
+          icon: z.string().optional(),
+        },
+      },
+      async (args) => {
+        try {
+          const d = await (await api('/api/trackers', { method: 'POST', body: JSON.stringify(args) })).json();
+          return ok(
+            `Lista creada: «${args.title}» (id: ${d.id}, prefijo ${d.prefix}). Estados: ${d.config.statuses.map((s) => s.name).join(', ')}. Campos: ${d.config.fields.map((f) => f.name).join(', ') || 'ninguno'}.`
+          );
+        } catch (e) {
+          return fail(e);
+        }
+      }
+    );
+
+    server.registerTool(
+      'update_tracker',
+      {
+        title: 'Configurar lista de seguimiento',
+        description:
+          'Cambia la configuración de una lista: añadir campos (desplegable, varias opciones, texto, número, fecha, persona, casilla, enlace), añadir opciones a un desplegable, añadir estados, renombrar la lista o cambiar su prefijo. Solo cuando el usuario lo pida. No borra nada (para quitar campos o estados, que lo haga el usuario desde la interfaz).',
+        inputSchema: {
+          tracker: trackerRef,
+          add_fields: z
+            .array(
+              z.object({
+                name: z.string(),
+                type: z.enum(['select', 'multi', 'text', 'number', 'date', 'person', 'checkbox', 'url']),
+                options: z.array(z.string()).optional().describe('Opciones de un desplegable'),
+              })
+            )
+            .optional(),
+          add_options: z.array(z.object({ field: z.string(), options: z.array(z.string()) })).optional().describe('Nuevas opciones para desplegables existentes'),
+          add_statuses: z.array(z.object({ name: z.string(), category: z.enum(['todo', 'doing', 'blocked', 'done']) })).optional(),
+          prefix: z.string().optional(),
+          title: z.string().optional(),
+        },
+      },
+      async ({ tracker, add_fields = [], add_options = [], add_statuses = [], prefix, title }) => {
+        try {
+          const t = await resolveTracker(tracker);
+          const config = JSON.parse(JSON.stringify(t.config));
+          const COLORS = ['blue', 'green', 'yellow', 'orange', 'red', 'purple', 'pink', 'teal', 'gray'];
+          const optsOf = (names, start = 0) => names.map((n, i) => ({ name: n, color: COLORS[(start + i) % COLORS.length] }));
+          for (const f of add_fields) config.fields.push({ name: f.name, type: f.type, ...(f.type === 'select' || f.type === 'multi' ? { options: optsOf(f.options || []) } : {}) });
+          for (const a of add_options) {
+            const f = config.fields.find((x) => x.name.toLowerCase() === a.field.toLowerCase() || x.id === a.field);
+            if (!f || !f.options) return fail(new Error(`«${a.field}» no es un desplegable de la lista`));
+            const have = new Set(f.options.map((o) => o.name.toLowerCase()));
+            f.options.push(...optsOf(a.options.filter((o) => !have.has(o.toLowerCase())), f.options.length));
+          }
+          for (const s of add_statuses) config.statuses.push({ name: s.name, category: s.category, color: s.category === 'done' ? 'green' : s.category === 'blocked' ? 'red' : s.category === 'doing' ? 'yellow' : 'blue' });
+          const body = { config };
+          if (prefix) body.prefix = prefix;
+          const d = await (await api(`/api/pages/${t.id}/tracker`, { method: 'PATCH', body: JSON.stringify(body) })).json();
+          if (title) await api(`/api/pages/${t.id}`, { method: 'PUT', body: JSON.stringify({ title }) });
+          return ok(`Lista ${d.prefix} actualizada. Campos: ${d.config.fields.map((f) => f.name).join(', ') || 'ninguno'}. Estados: ${d.config.statuses.map((s) => s.name).join(', ')}.`);
+        } catch (e) {
+          return fail(e);
+        }
+      }
+    );
+
+    server.registerTool(
+      'list_issues',
+      {
+        title: 'Listar tickets',
+        description:
+          'Lista tickets de seguimiento de una lista o de todas, con clave, estado y campos. Úsala para "¿qué está bloqueado?", "¿qué tengo pendiente?", "temas abiertos de AXA", o antes de crear uno para no duplicarlo.',
+        inputSchema: {
+          tracker: trackerRef.optional(),
+          category: z.string().optional().describe('todo, doing, blocked, done o "active" (pendiente + en curso + bloqueado), separadas por comas'),
+          status: z.string().optional().describe('Nombres de estado de la lista, separados por comas'),
+          blocked_only: z.boolean().optional().describe('Solo lo bloqueado (estado bloqueado o bloqueado por otro ticket abierto)'),
+          fields: z.record(z.string(), z.string()).optional().describe('Filtros por campo: {"Responsable": "vmorant", "Impacto": "Alto"}'),
+          query: z.string().optional().describe('Texto en clave o título'),
+        },
+      },
+      async ({ tracker, category, status, blocked_only, fields, query }) => {
+        try {
+          const qs = new URLSearchParams();
+          if (tracker) qs.set('tracker', (await resolveTracker(tracker)).id);
+          if (category) qs.set('category', category);
+          if (status) qs.set('status', status);
+          if (blocked_only) qs.set('blocked', 'true');
+          if (fields) qs.set('fields', JSON.stringify(fields));
+          if (query) qs.set('q', query);
+          const [r, { trackers }] = await Promise.all([(await api(`/api/issues?${qs}`)).json(), (await api('/api/trackers')).json()]);
+          if (!r.issues.length) return ok('No hay tickets que coincidan.');
+          const fieldsOf = (id) => trackers.find((t) => t.id === id)?.config.fields;
+          const byTracker = new Map();
+          for (const i of r.issues) {
+            if (!byTracker.has(i.tracker_title)) byTracker.set(i.tracker_title, []);
+            byTracker.get(i.tracker_title).push(issueLine(i, fieldsOf));
+          }
+          return ok([...byTracker].map(([t, lines]) => `## ${t}\n${lines.join('\n')}`).join('\n\n'));
+        } catch (e) {
+          return fail(e);
+        }
+      }
+    );
+
+    server.registerTool(
+      'create_issue',
+      {
+        title: 'Crear ticket',
+        description:
+          'Crea un ticket en una lista de seguimiento (mira antes list_trackers para elegir la lista y sus campos, y list_issues para no duplicar). Solo cuando el usuario lo pida ("apúntalo como bloqueante", "crea los tickets de esta reunión"). Relaciónalo con las páginas de las que sale o que lo documentan.',
+        inputSchema: {
+          tracker: trackerRef,
+          title: z.string().describe('Título corto y concreto'),
+          status: z.string().optional().describe('Nombre del estado (por defecto el primero de la lista)'),
+          fields: fieldsSchema,
+          description: z.string().optional().describe('Descripción en Markdown: contexto, impacto, qué se necesita'),
+          links: z.array(linkSchema).optional().describe('Relaciones a crear'),
+          from_idea_id: z.string().optional().describe('Idea de la que sale: queda enlazada y la idea lo registra como resultado'),
+          tags: z.array(z.string()).optional(),
+        },
+      },
+      async ({ tracker, ...args }) => {
+        try {
+          const t = await resolveTracker(tracker);
+          const d = await (await api('/api/issues', { method: 'POST', body: JSON.stringify({ ...args, tracker_id: t.id }) })).json();
+          return ok(`Ticket creado: ${d.key} «${args.title}» en «${d.tracker.title}» (id: ${d.page_id}, ${d.status_name}) con ${d.links.length} relación(es).`);
+        } catch (e) {
+          return fail(e);
+        }
+      }
+    );
+
+    server.registerTool(
+      'update_issue',
+      {
+        title: 'Actualizar ticket',
+        description:
+          'Cambia estado, campos o título de un ticket y/o añade un comentario a su cronología (queda con autor y fecha). Cuando el usuario lo pida o lo confirme (p. ej. "marca BLQ-12 como resuelto", "comenta que IT ya dio acceso").',
+        inputSchema: {
+          issue: issueRef,
+          status: z.string().optional().describe('Nombre del nuevo estado'),
+          fields: fieldsSchema,
+          title: z.string().optional(),
+          comment: z.string().optional().describe('Comentario en Markdown para la cronología'),
+        },
+      },
+      async ({ issue, ...rest }) => {
+        try {
+          const id = await resolveIssue(issue);
+          const d = await (await api(`/api/pages/${id}/issue`, { method: 'PATCH', body: JSON.stringify(rest) })).json();
+          return ok(`${d.key} actualizado: ${d.status_name}.`);
+        } catch (e) {
+          return fail(e);
+        }
+      }
+    );
+
+    server.registerTool(
+      'link_issue',
+      {
+        title: 'Relacionar ticket',
+        description:
+          'Añade o quita una relación de un ticket: bloquea a otro ticket, relacionado con, documentado en una página, o viene de (idea, acta, página). Para quitar, pasa remove=true con el mismo tipo y destino.',
+        inputSchema: {
+          issue: issueRef,
+          type: linkSchema.shape.type,
+          target: linkSchema.shape.target,
+          remove: z.boolean().optional(),
+        },
+      },
+      async ({ issue, type, target, remove }) => {
+        try {
+          const id = await resolveIssue(issue);
+          if (remove) {
+            const d = await (await api(`/api/pages/${id}/issue`)).json();
+            const tid = /^[A-Za-z][A-Za-z0-9]{0,9}-\d+$/.test(target) ? await resolveIssue(target) : target;
+            const l = d.links.find((x) => x.type === type && x.target_id === tid);
+            if (!l) return fail(new Error('Esa relación no existe'));
+            await api(`/api/pages/${id}/issue/links/${l.id}`, { method: 'DELETE' });
+            return ok(`Relación quitada de ${d.key}.`);
+          }
+          const d = await (await api(`/api/pages/${id}/issue/links`, { method: 'POST', body: JSON.stringify({ type, target }) })).json();
+          return ok(`${d.key}: ${d.links.length} relación(es) salientes, ${d.incoming.length} entrantes.`);
         } catch (e) {
           return fail(e);
         }
