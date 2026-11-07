@@ -596,7 +596,7 @@ app.get('/api/trash/files', (req, res) => {
        FROM files f LEFT JOIN pages p ON p.id = f.page_id
        WHERE f.deleted_at IS NOT NULL AND f.workspace_id = ? ORDER BY f.deleted_at DESC`
     )
-    .all();
+    .all(req.ws);
   res.json(rows);
 });
 

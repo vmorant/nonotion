@@ -5441,3 +5441,36 @@ kbd {
 .idea-view.readonly .idea-add {
   display: none;
 }
+
+/* --- Diálogo de nuevo espacio --- */
+.ws-new {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.ws-new-hint {
+  margin: 0;
+  font-size: 0.84rem;
+  color: var(--text-dim);
+}
+
+.ws-new-row {
+  display: flex;
+  gap: 8px;
+}
+
+.ws-new-row input {
+  margin: 0;
+}
+
+.ws-new-icon {
+  flex: 0 0 56px;
+  text-align: center;
+}
+
+.ws-new-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}

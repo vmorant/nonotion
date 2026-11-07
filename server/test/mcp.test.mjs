@@ -204,6 +204,19 @@ test('canvas por MCP: crear, leer, actualizar y protecciones', async () => {
   assert.match(r.text, /tipo "nada" no válido/);
 });
 
+test('papelera de archivos: lista los adjuntos borrados del espacio', async () => {
+  const p = await api('/api/pages', { title: 'Con adjunto' });
+  const fd = new FormData();
+  fd.append('page_id', p.id);
+  fd.append('file', new Blob(['hola'], { type: 'text/plain' }), 'borrame.txt');
+  const up = await (await fetch(`${BASE}/api/files`, { method: 'POST', headers: { Authorization: `Bearer ${token}` }, body: fd })).json();
+  await api(`/api/files/${up.id}`, null, 'DELETE');
+  const r = await fetch(`${BASE}/api/trash/files`, { headers: { Authorization: `Bearer ${token}` } });
+  assert.equal(r.status, 200, 'antes fallaba con 500 (faltaba el espacio en la consulta)');
+  const list = await r.json();
+  assert.ok(list.some((f) => f.id === up.id && f.page_title === 'Con adjunto'));
+});
+
 test('ideas por MCP: crear, desarrollar, materializar, leer y protecciones', async () => {
   const { tools } = await rpc('tools/list', {});
   const names = tools.map((t) => t.name);
