@@ -91,6 +91,13 @@ export function mountMcp(app, port) {
   // Las herramientas llaman a la API con el token de la conexión: el servidor
   // aplica así el mismo control de espacios que a cualquier otra petición
   async function apiWith(token, p, options = {}) {
+    // Los ids que llegan de Claude van dentro de la ruta: nada de "..", "%" ni "\\"
+    // que pudiera cambiar a qué recurso se llama
+    if (/\.\.|%|\\/.test(p.split('?')[0])) {
+      const err = new Error('Identificador no válido');
+      err.status = 400;
+      throw err;
+    }
     const headers = { Authorization: `Bearer ${token}`, ...(options.headers || {}) };
     if (options.body && typeof options.body === 'string') headers['Content-Type'] = 'application/json';
     const res = await fetch(base + p, { ...options, headers });
@@ -846,6 +853,7 @@ export function mountMcp(app, port) {
 
   const ws = db.prepare('SELECT w.name FROM api_tokens t JOIN workspaces w ON w.id = t.workspace_id WHERE t.token = ?').get(legacyToken);
   console.log(`MCP activo: POST /mcp/<token> (un token por espacio y persona: Ajustes del espacio → Conector de Claude)`);
-  console.log(`  Conector del espacio "${ws?.name || '?'}": https://TU_DOMINIO/mcp/${legacyToken}`);
+  // Nunca el token entero en el registro (journald lo guarda y puede leerlo más gente)
+  if (ws) console.log(`  Conector histórico del espacio "${ws.name}": /mcp/${legacyToken.slice(0, 4)}… (cópialo desde Ajustes del espacio)`);
   return legacyToken;
 }

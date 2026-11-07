@@ -3,7 +3,7 @@ import { Link } from 'react-router-dom';
 import MarkdownIt from 'markdown-it';
 import { Sparkles, Plus, Trash2, Upload, Copy, Check, ExternalLink, FileText, LayoutDashboard, CalendarDays, Pencil } from 'lucide-react';
 import { api } from '../../api.js';
-import { viewFile } from '../../fileLinks.js';
+import { viewFile, safeHref } from '../../fileLinks.js';
 import {
   parseIdea,
   STATUSES,
@@ -80,7 +80,7 @@ function Seed({ seed, files, pages, readOnly, onRemove, onNote }) {
         </button>
       )}
       {seed.kind === 'link' && (
-        <a className="idea-seed-link" href={seed.url} target="_blank" rel="noreferrer">
+        <a className="idea-seed-link" href={safeHref(seed.url) || undefined} target="_blank" rel="noreferrer">
           <ExternalLink {...ICON} /> {seed.url}
         </a>
       )}
@@ -195,7 +195,7 @@ function Outcome({ outcome, pages, files, readOnly, onRemove }) {
       host = new URL(outcome.url).hostname;
     } catch {}
     body = (
-      <a className="idea-outcome-link" href={outcome.url} target="_blank" rel="noreferrer">
+      <a className="idea-outcome-link" href={safeHref(outcome.url) || undefined} target="_blank" rel="noreferrer">
         <ExternalLink {...ICON} /> {outcome.label || host}
       </a>
     );

@@ -107,11 +107,19 @@ export function createToken(wsId, login, label) {
 
 // El token histórico (archivo mcp_token) queda como token del espacio inicial:
 // el conector de Claude que ya estaba configurado sigue funcionando igual
+// Se adopta UNA sola vez: si después se revoca desde Ajustes, no vuelve a
+// aparecer al reiniciar (antes se reinsertaba en cada arranque).
 export function adoptLegacyToken(token) {
   if (!token) return;
-  db.prepare(
-    `INSERT OR IGNORE INTO api_tokens (token, workspace_id, github_login, label) VALUES (?, ?, NULL, 'Conector principal')`
-  ).run(token, DEFAULT_WORKSPACE);
+  db.exec(`CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT)`);
+  const done = db.prepare(`SELECT value FROM meta WHERE key = 'legacy_token_adopted'`).get();
+  if (done) return;
+  db.transaction(() => {
+    db.prepare(
+      `INSERT OR IGNORE INTO api_tokens (token, workspace_id, github_login, label) VALUES (?, ?, NULL, 'Conector principal')`
+    ).run(token, DEFAULT_WORKSPACE);
+    db.prepare(`INSERT INTO meta (key, value) VALUES ('legacy_token_adopted', datetime('now'))`).run();
+  })();
 }
 
 // ---------- Resolución del espacio de cada petición ----------
@@ -146,16 +154,31 @@ const RESOURCE_ROUTES = [
 // Rutas públicas o que no tocan datos de un espacio
 const UNSCOPED = [/^\/api\/share\//, /^\/api\/health$/, /^\/api\/me$/, /^\/api\/workspaces(?:\/|$)/, /^\/api\/tokens\//];
 
+// Prefijos cuyo segmento siguiente es SIEMPRE el id de un recurso (salvo los
+// listados ya cubiertos en RESOURCE_ROUTES): si el id no es válido, 404 sin más
+const ID_PREFIXES = /^\/(?:api\/(?:pages|trash|versions|files|uploads)|files)\/[^/]/;
+
 export function workspaceGuard(req, res, next) {
-  const p = req.path;
+  // Se compara con la ruta DECODIFICADA, igual que Express decodifica :id antes
+  // del handler: si no, /api/pages/%41bc… se saltaría el control de espacio
+  let p;
+  try {
+    p = decodeURIComponent(req.path);
+  } catch {
+    return res.status(400).json({ error: 'Ruta no válida' });
+  }
   const isApi = p.startsWith('/api/');
   if (!isApi && !p.startsWith('/files/')) return next(); // SPA, assets, MCP (el MCP llama a la API con su token)
   if (UNSCOPED.some((re) => re.test(p))) return next();
 
+  let listing = false;
   for (const [re, resolve] of RESOURCE_ROUTES) {
     const m = p.match(re);
     if (!m) continue;
-    if (!resolve) break; // listado: espacio pedido
+    if (!resolve) {
+      listing = true; // listado: espacio pedido
+      break;
+    }
     const ws = resolve(m[1]);
     // Un adjunto de página compartida es público aunque se tenga sesión
     if (p.startsWith('/files/') && ws && isSharedFileId(m[1]) && req.method === 'GET') {
@@ -166,6 +189,9 @@ export function workspaceGuard(req, res, next) {
     req.ws = ws;
     return next();
   }
+  // Un recurso con un id que no se ha podido resolver arriba no se sirve nunca
+  // con el espacio por defecto de quien pregunta
+  if (!listing && ID_PREFIXES.test(p)) return res.status(404).json({ error: 'No encontrado' });
 
   const ws = requestedWs(req);
   if (!ws || !roleIn(req, ws)) {
@@ -189,6 +215,17 @@ function isSharedFileId(fileId) {
 // ¿La página existe y es del espacio de la petición? (para parent_id, page_id del cuerpo)
 export function pageInWs(pageId, ws) {
   return Boolean(pageId && db.prepare('SELECT 1 FROM pages WHERE id = ? AND workspace_id = ?').get(pageId, ws));
+}
+
+// Padre válido para crear una página: del espacio, no en la papelera (se
+// borraría con él al vaciarla) y no una idea (las ideas no tienen subpáginas)
+export function liveParentInWs(pageId, ws) {
+  return Boolean(
+    pageId &&
+      db
+        .prepare(`SELECT 1 FROM pages WHERE id = ? AND workspace_id = ? AND trashed_at IS NULL AND kind != 'idea'`)
+        .get(pageId, ws)
+  );
 }
 
 // ---------- API de espacios, miembros y tokens ----------

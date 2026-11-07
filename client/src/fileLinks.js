@@ -58,6 +58,15 @@ export function viewFile(file) {
   document.dispatchEvent(new CustomEvent('nonotion:view-file', { detail: file }));
 }
 
+// Solo webs, rutas internas o correo: nunca javascript:, data:, vbscript:…
+export function safeHref(href) {
+  const h = String(href || '').trim();
+  if (/^(https?:|mailto:)/i.test(h) || (h.startsWith('/') && !h.startsWith('//'))) return h;
+  return null;
+}
+
 export function openInNewTab(href) {
-  window.open(href, '_blank', 'noopener,noreferrer');
+  const h = safeHref(href);
+  if (!h) return;
+  window.open(h, '_blank', 'noopener,noreferrer');
 }
