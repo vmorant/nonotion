@@ -140,7 +140,8 @@ class ImageNodeView {
     this.toolbar.appendChild(document.createElement('span')).className = 'sep';
     this.button('🔍', 'Ver en grande (o doble clic)', () => this.openViewer());
     this.button('⬇', 'Descargar', () => {
-      if (!this.node.attrs.src) return;
+      // solo imágenes de NoNotion, webs o data:image (nunca javascript:)
+      if (!/^(\/(?!\/)|https?:|data:image\/)/i.test(this.node.attrs.src || '')) return;
       const a = document.createElement('a');
       a.href = this.node.attrs.src;
       a.download = this.node.attrs.alt || '';

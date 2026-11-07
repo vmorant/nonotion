@@ -20,6 +20,8 @@ export class CanvasError extends Error {}
 const isColor = (c) => typeof c === 'string' && (/^[1-6]$/.test(c) || /^#[0-9a-fA-F]{6}$/.test(c));
 const num = (v, def = 0) => (Number.isFinite(Number(v)) ? Math.round(Number(v)) : def);
 const str = (v, max = 2000) => (typeof v === 'string' ? v.slice(0, max) : undefined);
+// Solo webs: un "javascript:" o "data:" en una tarjeta se ejecutaría en NoNotion
+export const isWebUrl = (u) => typeof u === 'string' && /^https?:\/\/[^\s]+$/i.test(u.trim());
 
 // ¿Es un canvas este contenido (objeto o JSON)?
 export function parseCanvas(content) {
@@ -69,8 +71,9 @@ export function normalizeCanvas(input) {
       if (n.subpath !== undefined) out.subpath = str(n.subpath, 300);
     }
     if (n.type === 'link') {
-      out.url = str(n.url, 2000);
+      out.url = str(n.url, 2000)?.trim();
       if (!out.url) throw new CanvasError(`Nodo ${i + 1}: falta "url"`);
+      if (!isWebUrl(out.url)) throw new CanvasError(`Nodo ${i + 1}: "url" debe ser una web http(s)`);
     }
     if (n.type === 'group') {
       if (n.label !== undefined) out.label = str(n.label, 300);

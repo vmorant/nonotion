@@ -12,7 +12,7 @@ import { docToMarkdown, markdownToDoc, appendMarkdown, replaceInDoc, EditError }
 import { mountMcp, getOrCreateToken } from './mcp.js';
 import { setupAuth, purgeExpiredSessions } from './auth.js';
 import { mountTags, tagsOf, setPageTags, copyTags, pagesWithTags, TAGS_COLUMN, splitTags, lowercaseTags } from './tags.js';
-import { workspaceGuard, mountWorkspaces, pageInWs, adoptLegacyToken, loginOf } from './workspaces.js';
+import { workspaceGuard, mountWorkspaces, pageInWs, liveParentInWs, adoptLegacyToken, loginOf, lookupToken, roleIn } from './workspaces.js';
 import { movePages, MoveError, describeMove } from './pageMove.js';
 import {
   EMPTY_CANVAS,
@@ -50,7 +50,9 @@ process.on('unhandledRejection', (e) => console.error('Error no capturado:', e))
 
 const app = express();
 app.disable('x-powered-by');
-app.use(express.json({ limit: '100mb' }));
+// /API/... o /Files/... no deben llegar a las rutas /api/... saltándose el
+// control de espacios (que compara la ruta tal cual): rutas sensibles a mayúsculas
+app.set('case sensitive routing', true);
 
 // Etiquetas siempre en minúsculas (migra y fusiona las antiguas; idempotente)
 lowercaseTags();
@@ -58,6 +60,15 @@ lowercaseTags();
 // Login con GitHub + tokens de API. Va antes que cualquier ruta.
 adoptLegacyToken(getOrCreateToken());
 const authCfg = setupAuth(app);
+// El cuerpo JSON se lee solo DESPUÉS de autenticar: antes, cualquiera sin
+// sesión podía mandar cuerpos de 100 MB y hacer que el servidor los procesara.
+// El MCP es público por ruta pero exige un token válido en la URL.
+app.use('/mcp/:token', (req, res, next) =>
+  lookupToken(req.params.token)
+    ? next()
+    : res.status(401).json({ jsonrpc: '2.0', error: { code: -32001, message: 'Token MCP inválido' }, id: null })
+);
+app.use(express.json({ limit: '100mb' }));
 // Espacios: cada petición queda limitada a los espacios de su usuario/token
 app.use(workspaceGuard);
 
@@ -81,6 +92,14 @@ function broadcast(event, originId, ws) {
   const data = `data: ${JSON.stringify(event)}\n\n`;
   for (const c of sseClients) {
     if (ws && c.ws !== ws) continue;
+    // Quien ha perdido el acceso (miembro quitado, token revocado) deja de recibir avisos
+    if (c.ws && !c.allowed()) {
+      sseClients.delete(c);
+      try {
+        c.res.end();
+      } catch {}
+      continue;
+    }
     if (originId && c.client === originId) continue; // no devolver al autor su propio cambio
     try {
       c.res.write(data);
@@ -107,6 +126,18 @@ function subtreeIds(rootId) {
 
 
 function permanentDelete(pageId) {
+  // Red de seguridad: si alguna subpágina sigue viva (creada bajo un padre ya en
+  // la papelera), se rescata a la raíz antes de borrar; la cascada no la toca
+  const live = db
+    .prepare(
+      `WITH RECURSIVE sub(id) AS (SELECT id FROM pages WHERE parent_id = ? UNION ALL SELECT p.id FROM pages p JOIN sub s ON p.parent_id = s.id)
+       SELECT p.id, p.parent_id FROM pages p JOIN sub ON sub.id = p.id WHERE p.trashed_at IS NULL`
+    )
+    .all(pageId);
+  const liveIds = new Set(live.map((r) => r.id));
+  for (const r of live) {
+    if (!liveIds.has(r.parent_id)) db.prepare('UPDATE pages SET parent_id = NULL WHERE id = ?').run(r.id);
+  }
   const subtree = subtreeIds(pageId);
   const placeholders = subtree.map(() => '?').join(',');
   const fileRows = db.prepare(`SELECT id FROM files WHERE page_id IN (${placeholders})`).all(...subtree);
@@ -132,7 +163,13 @@ app.get('/api/events', (req, res) => {
   });
   res.flushHeaders?.();
   res.write('retry: 3000\n\n');
-  const entry = { res, client: req.query.client || null, ws: req.ws };
+  const bearer = (req.headers.authorization || '').startsWith('Bearer ') ? req.headers.authorization.slice(7).trim() : null;
+  const entry = {
+    res,
+    client: req.query.client || null,
+    ws: req.ws,
+    allowed: () => (bearer && !lookupToken(bearer) ? false : Boolean(roleIn(req, req.ws))),
+  };
   sseClients.add(entry);
   const keepalive = setInterval(() => {
     try {
@@ -176,7 +213,9 @@ const validDate = (v) => (typeof v === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(v)
 app.post('/api/pages', (req, res) => {
   const { parent_id = null, title = '', icon = '', content = null, page_date = null } = req.body || {};
   const kind = ['canvas', 'idea'].includes(req.body?.kind) ? req.body.kind : 'doc';
-  if (parent_id && !pageInWs(parent_id, req.ws)) return res.status(400).json({ error: 'Padre inexistente' });
+  if (parent_id && !liveParentInWs(parent_id, req.ws)) {
+    return res.status(400).json({ error: 'Padre inexistente, en la papelera o que es una idea' });
+  }
   if (kind === 'idea' && parent_id) return res.status(400).json({ error: 'Las ideas viven fuera del árbol: no llevan padre' });
   // Canvas: JSON Canvas validado (vacío si no se da); documento: content opcional
   // como string = markdown crudo (mismo mecanismo que /api/capture)
@@ -339,7 +378,10 @@ app.put('/api/pages/:id', (req, res) => {
     }
   }
   if (typeof b.position === 'number') fields.position = b.position;
-  if (b.page_date !== undefined) fields.page_date = validDate(b.page_date);
+  if (b.page_date !== undefined) {
+    if (b.page_date && !validDate(b.page_date)) return res.status(400).json({ error: 'page_date debe ser AAAA-MM-DD' });
+    fields.page_date = validDate(b.page_date);
+  }
   // Cambiar de padre pasa por la misma función que el resto de movimientos
   let moved = false;
   if (b.parent_id !== undefined) {
@@ -496,7 +538,13 @@ app.post('/api/pages/:id/duplicate', (req, res) => {
   };
 
   const newId = db.transaction(() =>
-    clone(orig.id, orig.parent_id, `Copia de ${orig.title || 'Sin título'}`, orig.position + 1)
+    // si el padre está en la papelera, la copia va a la raíz (si no, se borraría con él)
+    clone(
+      orig.id,
+      orig.parent_id && liveParentInWs(orig.parent_id, orig.workspace_id) ? orig.parent_id : null,
+      `Copia de ${orig.title || 'Sin título'}`,
+      orig.position + 1
+    )
   )();
   notifyTree(req);
   res.json(db.prepare('SELECT * FROM pages WHERE id = ?').get(newId));
@@ -708,7 +756,7 @@ function deriveTitle(markdown) {
 // Cada espacio tiene su propio Inbox
 function getOrCreateInbox(ws) {
   const inbox = db
-    .prepare(`SELECT id FROM pages WHERE parent_id IS NULL AND title = 'Inbox' AND trashed_at IS NULL AND workspace_id = ?`)
+    .prepare(`SELECT id FROM pages WHERE parent_id IS NULL AND title = 'Inbox' AND kind = 'doc' AND trashed_at IS NULL AND workspace_id = ?`)
     .get(ws);
   if (inbox) return inbox.id;
   const id = nanoid(12);
@@ -725,7 +773,7 @@ app.post('/api/capture', async (req, res) => {
     return res.status(400).json({ error: 'Falta el campo "markdown"' });
   }
   let parentId = parent_id || null;
-  if (parentId && !pageInWs(parentId, req.ws)) {
+  if (parentId && !liveParentInWs(parentId, req.ws)) {
     return res.status(400).json({ error: 'Padre inexistente' });
   }
   if (!parentId) parentId = getOrCreateInbox(req.ws);
@@ -1023,6 +1071,11 @@ app.delete('/api/uploads/:id', (req, res) => {
 });
 
 const INLINE_MIME = /^(image|video|audio|text)\/|^application\/pdf$/;
+// Tipos que el navegador ejecutaría (HTML, SVG con scripts, XML…): se sirven
+// como texto o con CSP sandbox para que un adjunto subido no pueda ejecutar
+// código con la sesión de quien lo abre
+const ACTIVE_MIME = /^(text\/(html|xml|javascript|ecmascript|x-[a-z-]+)|application\/(xhtml\+xml|xml|javascript))\b/i;
+const FILE_CSP = "sandbox; default-src 'none'; img-src 'self' data: blob:; media-src 'self' blob:; style-src 'unsafe-inline'"; 
 
 // ---------- Vista previa de documentos de oficina (LibreOffice → PDF) ----------
 
@@ -1103,6 +1156,9 @@ app.post('/api/pages/:id/idea', async (req, res) => {
   if (!page0) return res.status(404).json({ error: 'Página no encontrada' });
   if (page0.kind !== 'idea') return res.status(400).json({ error: 'Esta página no es una idea' });
   const b = req.body || {};
+  for (const k of ['seeds_add', 'steps_add', 'outcomes_add', 'steps_update', 'outcomes_update', 'seeds_update']) {
+    if (b[k] !== undefined && !Array.isArray(b[k])) return res.status(400).json({ error: `"${k}" debe ser una lista` });
+  }
   try {
     // Referencias a archivos y páginas: del mismo espacio. Las capturas pasan
     // por OCR antes de tocar la base de datos (es lento y asíncrono).
@@ -1131,6 +1187,7 @@ app.post('/api/pages/:id/idea', async (req, res) => {
     }
     // Se relee la página: el OCR puede haber tardado y alguien (o Claude) haberla cambiado
     const page = db.prepare('SELECT * FROM pages WHERE id = ?').get(page0.id);
+    if (!page) return res.status(404).json({ error: 'La idea ya no existe' });
     const idea = patchIdea(page.content, b);
     const content = JSON.stringify(idea);
     const fields = { content, content_text: ideaText(idea) };
@@ -1150,7 +1207,9 @@ app.post('/api/pages/:id/idea', async (req, res) => {
     res.json({ ...updated, idea });
   } catch (e) {
     if (e instanceof IdeaError) return res.status(400).json({ error: e.message });
-    throw e;
+    // Express 4 no captura los errores de rutas async: sin esto, la petición no responde nunca
+    console.error('idea:', e);
+    if (!res.headersSent) res.status(500).json({ error: 'No se pudo actualizar la idea' });
   }
 });
 
@@ -1406,10 +1465,14 @@ app.get('/files/:id/:name?', (req, res) => {
   const filePath = path.join(FILES_DIR, f.id);
   if (!fs.existsSync(filePath)) return res.status(404).send('No encontrado');
   const encoded = encodeURIComponent(f.name);
-  if (f.mime && INLINE_MIME.test(f.mime)) {
+  const mime = (f.mime || '').toLowerCase();
+  // El PDF necesita el visor del navegador (incompatible con sandbox); el resto
+  // va siempre con CSP sandbox: aunque se abra directamente, no ejecuta scripts
+  if (mime !== 'application/pdf') res.setHeader('Content-Security-Policy', FILE_CSP);
+  if (mime && INLINE_MIME.test(mime)) {
     res.sendFile(filePath, {
       headers: {
-        'Content-Type': f.mime,
+        'Content-Type': ACTIVE_MIME.test(mime) ? 'text/plain; charset=utf-8' : f.mime,
         'Content-Disposition': `inline; filename*=UTF-8''${encoded}`,
       },
     });
@@ -1631,7 +1694,9 @@ app.get('/api/export', async (req, res) => {
     try {
       c = normalizeCanvas(page.content);
     } catch {
-      c = EMPTY_CANVAS;
+      // nunca se exporta vacío: se guarda el contenido original sin tocar
+      archive.append(page.content || '', { name: pathOfPage.get(page.id) });
+      continue;
     }
     const toVault = (ref) => {
       const pid = pageIdOfFile(ref);
@@ -1688,6 +1753,9 @@ const KEEP_DAILY = 30;
 let lastBackupSignature = null;
 
 function dbSignature() {
+  // total_changes cuenta TODAS las escrituras de este proceso (etiquetas,
+  // favoritas, miembros, tokens, papelera…), no solo las de contenido
+  const changes = db.prepare('SELECT total_changes() AS n').get().n;
   const s = db
     .prepare(
       `SELECT (SELECT COUNT(*) || ':' || COALESCE(SUM(rev), 0) || ':' || COALESCE(MAX(updated_at), '') FROM pages) AS p,
@@ -1695,7 +1763,7 @@ function dbSignature() {
               (SELECT COALESCE(MAX(id), 0) FROM versions) AS v`
     )
     .get();
-  return `${s.p}|${s.f}|${s.v}`;
+  return `${s.p}|${s.f}|${s.v}|${changes}`;
 }
 
 async function backupDatabase() {

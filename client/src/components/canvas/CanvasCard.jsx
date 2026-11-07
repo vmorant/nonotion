@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import MarkdownIt from 'markdown-it';
 import { FileText, Globe, ExternalLink, Paperclip } from 'lucide-react';
 import { api } from '../../api.js';
-import { fileFromHref, pageIdFromHref, viewFile, openInNewTab, guessMime } from '../../fileLinks.js';
+import { fileFromHref, pageIdFromHref, viewFile, openInNewTab, guessMime, safeHref } from '../../fileLinks.js';
 
 // Contenido de una tarjeta del canvas según su tipo (JSON Canvas):
 // text (Markdown), file (página de NoNotion o adjunto), link (web) y group.
@@ -145,9 +145,15 @@ function FileCard({ href }) {
 
 function LinkCard({ url, selected }) {
   let host = url;
+  let sameOrigin = false;
   try {
-    host = new URL(url).hostname;
+    const u = new URL(url, location.origin);
+    host = u.hostname;
+    sameOrigin = u.origin === location.origin;
   } catch {}
+  // Solo webs http(s); una página de este mismo dominio NO recibe allow-same-origin
+  // (con allow-scripts, juntos anularían el sandbox)
+  const web = /^https?:\/\//i.test(String(url || '').trim());
   return (
     <div className="canvas-link">
       <div className="canvas-card-head">
@@ -165,15 +171,19 @@ function LinkCard({ url, selected }) {
         </button>
       </div>
       {/* Hasta seleccionar la tarjeta, la web no captura el ratón (como en Obsidian) */}
-      <iframe
-        src={url}
-        title={url}
-        className="canvas-iframe"
-        style={{ pointerEvents: selected ? 'auto' : 'none' }}
-        sandbox="allow-scripts allow-same-origin allow-popups allow-forms"
-        referrerPolicy="no-referrer"
-        loading="lazy"
-      />
+      {web ? (
+        <iframe
+          src={url}
+          title={url}
+          className="canvas-iframe"
+          style={{ pointerEvents: selected ? 'auto' : 'none' }}
+          sandbox={sameOrigin ? 'allow-popups allow-forms' : 'allow-scripts allow-same-origin allow-popups allow-forms'}
+          referrerPolicy="no-referrer"
+          loading="lazy"
+        />
+      ) : (
+        <div className="canvas-empty-hint">Enlace no válido (solo webs http/https)</div>
+      )}
     </div>
   );
 }

@@ -39,6 +39,7 @@ export class IdeaError extends Error {}
 export const newId = () => crypto.randomBytes(5).toString('hex');
 const now = () => new Date().toISOString().slice(0, 19).replace('T', ' ');
 const str = (v, max = 2000) => (typeof v === 'string' ? v.slice(0, max) : undefined);
+const isWebUrl = (u) => typeof u === 'string' && /^https?:\/\/[^\s]+$/i.test(u);
 const stamp = (v) => (typeof v === 'string' && /^\d{4}-\d{2}-\d{2}/.test(v) ? v.slice(0, 19) : now());
 
 // ¿Es una idea este contenido (objeto o JSON)?
@@ -69,8 +70,9 @@ function normalizeSeed(s, i) {
     if (s.ocr !== undefined) out.ocr = str(s.ocr, MAX_TEXT);
   }
   if (s.kind === 'link') {
-    out.url = str(s.url, 2000);
+    out.url = str(s.url, 2000)?.trim();
     if (!out.url) throw new IdeaError(`Semilla ${i + 1}: falta url`);
+    if (!isWebUrl(out.url)) throw new IdeaError(`Semilla ${i + 1}: la url debe ser una web http(s)`);
   }
   if (s.kind === 'page') {
     if (!ID_RE.test(s.page_id || '')) throw new IdeaError(`Semilla ${i + 1}: falta page_id`);
@@ -101,8 +103,9 @@ function normalizeOutcome(o, i) {
     if (!ID_RE.test(o.file_id || '')) throw new IdeaError(`Resultado ${i + 1}: falta file_id`);
     out.file_id = o.file_id;
   } else {
-    out.url = str(o.url, 2000);
+    out.url = str(o.url, 2000)?.trim();
     if (!out.url) throw new IdeaError(`Resultado ${i + 1}: falta url`);
+    if (!isWebUrl(out.url)) throw new IdeaError(`Resultado ${i + 1}: la url debe ser una web http(s)`);
   }
   return out;
 }
