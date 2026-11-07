@@ -76,6 +76,7 @@ export function GraphSettings({ settings, onChange, local, onAnimate, onClose })
         <Toggle label="Huérfanas (sin enlaces)" value={settings.showOrphans} onChange={set('showOrphans')} />
         <Toggle label="Jerarquía (página → subpáginas)" value={settings.showHierarchy} onChange={set('showHierarchy')} />
         <Toggle label="Ideas (rombos)" value={settings.showIdeas} onChange={set('showIdeas')} />
+        <Toggle label="Seguimiento (triángulos)" value={settings.showIssues} onChange={set('showIssues')} />
       </Section>
       <Section title="Grupos" defaultOpen={settings.groups.length > 0}>
         {settings.groups.map((g, i) => (
@@ -189,6 +190,9 @@ export default function GraphView({ data, settings, onSettings, focusId = null, 
       tag: '#2ecc8f',
       file: cssVar('--text-faint', '#5c6373'),
       idea: cssVar('--idea', '#ffc53d'),
+      danger: cssVar('--danger', '#ff4d5e'),
+      warn: cssVar('--warn', '#ffc53d'),
+      success: cssVar('--success', '#2ecc8f'),
       canvas: '#9b6bff',
     };
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
@@ -212,14 +216,15 @@ export default function GraphView({ data, settings, onSettings, focusId = null, 
       if (!visible(l.source) || !visible(l.target)) continue;
       const lit = hov && (l.source.id === hov.id || l.target.id === hov.id);
       ctx.globalAlpha = hov && !lit ? 0.12 : l.type === 'tree' ? 0.45 : 0.75;
-      ctx.strokeStyle = lit ? colors.accent : colors.line;
+      // "bloquea" en rojo: las cadenas de bloqueo se ven de un vistazo
+      ctx.strokeStyle = lit ? colors.accent : l.rel === 'blocks' ? colors.danger : colors.line;
       ctx.lineWidth = (lit ? 1.6 : 1) * s.linkThickness / Math.sqrt(v.k);
       ctx.setLineDash(l.type === 'tree' ? [3 / v.k, 3 / v.k] : []);
       ctx.beginPath();
       ctx.moveTo(l.source.x, l.source.y);
       ctx.lineTo(l.target.x, l.target.y);
       ctx.stroke();
-      if (s.arrows && l.type === 'link') {
+      if ((s.arrows && l.type === 'link') || l.rel === 'blocks') {
         const ang = Math.atan2(l.target.y - l.source.y, l.target.x - l.source.x);
         const tx = l.target.x - Math.cos(ang) * (l.target.r + 1.5);
         const ty = l.target.y - Math.sin(ang) * (l.target.r + 1.5);
@@ -243,7 +248,21 @@ export default function GraphView({ data, settings, onSettings, focusId = null, 
       ctx.globalAlpha = lit ? 1 : 0.18;
       const base =
         n.color ||
-        (n.kind === 'tag' ? colors.tag : n.kind === 'file' ? colors.file : n.kind === 'canvas' ? colors.canvas : n.kind === 'idea' ? colors.idea : colors.node);
+        (n.kind === 'tag'
+          ? colors.tag
+          : n.kind === 'file'
+            ? colors.file
+            : n.kind === 'canvas'
+              ? colors.canvas
+              : n.kind === 'idea'
+                ? colors.idea
+                : n.kind === 'issue'
+                  ? n.status === 'blocked'
+                    ? colors.danger
+                    : n.status === 'resolved' || n.status === 'closed'
+                      ? colors.success
+                      : colors.warn
+                  : colors.node);
       ctx.fillStyle = n.id === focusId || (hov && n.id === hov.id) ? colors.accent : base;
       ctx.beginPath();
       if (n.kind === 'file') ctx.rect(n.x - n.r, n.y - n.r, n.r * 2, n.r * 2);
@@ -254,6 +273,13 @@ export default function GraphView({ data, settings, onSettings, focusId = null, 
         ctx.lineTo(n.x + r, n.y);
         ctx.lineTo(n.x, n.y + r);
         ctx.lineTo(n.x - r, n.y);
+        ctx.closePath();
+      } else if (n.kind === 'issue') {
+        // triángulo: un elemento de seguimiento
+        const r = n.r * 1.3;
+        ctx.moveTo(n.x, n.y - r);
+        ctx.lineTo(n.x + r * 0.95, n.y + r * 0.7);
+        ctx.lineTo(n.x - r * 0.95, n.y + r * 0.7);
         ctx.closePath();
       } else ctx.arc(n.x, n.y, n.r, 0, Math.PI * 2);
       ctx.fill();

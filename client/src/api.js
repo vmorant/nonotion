@@ -176,6 +176,14 @@ export const api = {
   pageMarkdown: (id) => req(`/api/pages/${id}/markdown`),
   capture: (data) => req('/api/capture', { method: 'POST', body: JSON.stringify(data) }),
   graph: () => req('/api/graph'),
+  // Seguimiento (bloqueos, problemas, riesgos, tareas…)
+  issues: (params = {}) => req(`/api/issues?${new URLSearchParams(Object.entries(params).filter(([, v]) => v !== undefined && v !== '' && v !== null))}`),
+  createIssue: (data) => req('/api/issues', { method: 'POST', body: JSON.stringify(data) }),
+  issue: (id) => req(`/api/pages/${id}/issue`),
+  updateIssue: (id, data) => req(`/api/pages/${id}/issue`, { method: 'PATCH', body: JSON.stringify(data) }),
+  linkIssue: (id, type, target) => req(`/api/pages/${id}/issue/links`, { method: 'POST', body: JSON.stringify({ type, target }) }),
+  unlinkIssue: (id, linkId) => req(`/api/pages/${id}/issue/links/${linkId}`, { method: 'DELETE' }),
+  pageIssues: (id) => req(`/api/pages/${id}/issues`),
   // Ideas (desarrollo de ideas fuera del árbol)
   ideas: () => req('/api/ideas'),
   createIdea: (data) => req('/api/pages', { method: 'POST', body: JSON.stringify({ ...data, kind: 'idea' }) }),

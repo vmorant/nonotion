@@ -19,6 +19,7 @@ import {
   LayoutDashboard,
   Waypoints,
   Lightbulb,
+  ListChecks,
 } from 'lucide-react';
 
 function TreeItem({ page, index, childrenMap, depth, onCreate, onDelete, onDuplicate, onMove, onFavorite, onMoveTo }) {
@@ -236,7 +237,9 @@ function QuickSection({ name, title, items, byId }) {
               title={parent ? `${parent.title || 'Sin título'} / ${p.title || 'Sin título'}` : p.title}
             >
               <span className="tree-icon">{p.icon || (p.kind === 'canvas' ? '🧩' : '📄')}</span>
-              <span className="tree-title">{p.title || 'Sin título'}</span>
+              <span className="tree-title">
+                {p.issue_key && <span className="issue-key small">{p.issue_key}</span>} {p.title || 'Sin título'}
+              </span>
               {parent && <span className="quick-parent">{parent.title || 'Sin título'}</span>}
             </NavLink>
           );
@@ -328,9 +331,11 @@ export default function Sidebar({
 
   // Las ideas viven en su propia vista, no en el árbol
   const ideasCount = pages.filter((p) => p.kind === 'idea').length;
+  const activeIssues = pages.filter((p) => p.kind === 'issue' && ['open', 'in_progress', 'blocked'].includes(p.issue_status));
+  const blockedIssues = activeIssues.filter((p) => p.issue_status === 'blocked').length;
   const childrenMap = new Map();
   for (const p of pages) {
-    if (p.kind === 'idea') continue;
+    if (p.kind === 'idea' || p.kind === 'issue') continue; // viven en sus propias vistas
     const key = p.parent_id || null;
     if (!childrenMap.has(key)) childrenMap.set(key, []);
     childrenMap.get(key).push(p);
@@ -405,6 +410,14 @@ export default function Sidebar({
       <div className="sidebar-tools">
         <NavLink to="/calendar" className={({ isActive }) => 'sidebar-tool-link' + (isActive ? ' active' : '')}>
           <CalendarDays size={16} strokeWidth={1.8} /> Calendario
+        </NavLink>
+        <NavLink to="/issues" className={({ isActive }) => 'sidebar-tool-link' + (isActive ? ' active' : '')}>
+          <ListChecks size={16} strokeWidth={1.8} /> Seguimiento
+          {activeIssues.length > 0 && (
+            <span className={'sidebar-count' + (blockedIssues ? ' danger' : '')} title={blockedIssues ? `${blockedIssues} bloqueado(s)` : 'Activos'}>
+              {activeIssues.length}
+            </span>
+          )}
         </NavLink>
         <NavLink to="/ideas" className={({ isActive }) => 'sidebar-tool-link' + (isActive ? ' active' : '')}>
           <Lightbulb size={16} strokeWidth={1.8} /> Ideas

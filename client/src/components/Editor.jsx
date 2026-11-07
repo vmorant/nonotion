@@ -20,6 +20,8 @@ import TableToolbar from './TableToolbar.jsx';
 import { TableNav } from './tableTools.js';
 import LinkPopover, { linkAt } from './LinkPopover.jsx';
 import { PageLinkSuggest } from './pageLinks.js';
+import { IssueRefs, issueRefsKey, issueIndexFrom } from './issueRefs.js';
+import { useNavigate } from 'react-router-dom';
 import { ResizableImage, insertImages } from './imageView.js';
 import { pageIdFromHref, openInNewTab } from '../fileLinks.js';
 import { withMarkdownTables, withCellAlign, fixParsedTables, protectFormulas } from '../tableMarkdown.js';
@@ -104,6 +106,12 @@ export default function Editor({ initialContent, onChange, onFileUploaded, pageI
   const wrapRef = useRef(null);
   const pagesRef = useRef(pages);
   pagesRef.current = pages;
+  // Claves de seguimiento (AXA-12) del espacio, para enlazarlas en el texto
+  const issueIndexRef = useRef(null);
+  issueIndexRef.current = issueIndexFrom(pages);
+  const navigate = useNavigate();
+  const navigateRef = useRef(navigate);
+  navigateRef.current = navigate;
   const [uploads, setUploads] = useState([]); // archivos (no imagen) pegados/arrastrados subiendo ahora
   const [link, setLink] = useState(null); // enlace con la burbuja abierta
 
@@ -149,6 +157,7 @@ export default function Editor({ initialContent, onChange, onFileUploaded, pageI
       SlashCommands,
       HeadingFold.configure({ pageId }),
       PageLinkSuggest.configure({ getPages: () => pagesRef.current, currentId: pageId }),
+      IssueRefs.configure({ getIndex: () => issueIndexRef.current }),
       TableNav,
       Placeholder.configure({
         placeholder: "Escribe algo, pega Markdown de Claude, o usa '/' para comandos…",
@@ -206,6 +215,15 @@ export default function Editor({ initialContent, onChange, onFileUploaded, pageI
       handleDOMEvents: {
         // Clic en un enlace: burbuja; con Ctrl/⌘, pestaña nueva directamente
         click: (view, event) => {
+          // Clave de un elemento (AXA-12): abre el elemento
+          const ref = event.button === 0 && event.target.closest?.('.issue-ref[data-issue-id]');
+          if (ref) {
+            event.preventDefault();
+            const id = ref.getAttribute('data-issue-id');
+            if (event.ctrlKey || event.metaKey) openInNewTab(`/p/${id}`);
+            else navigateRef.current(`/p/${id}`);
+            return true;
+          }
           const l = event.button === 0 && linkAt(view, event);
           if (!l) return false;
           if (event.ctrlKey || event.metaKey) {
@@ -235,6 +253,10 @@ export default function Editor({ initialContent, onChange, onFileUploaded, pageI
 
   const editorRef = useRef(null);
   editorRef.current = editor;
+  const issueSig = (pages || []).filter((p) => p.issue_key).map((p) => `${p.issue_key}:${p.issue_status}:${p.title}`).join('|');
+  useEffect(() => {
+    if (editor && !editor.isDestroyed) editor.view.dispatch(editor.state.tr.setMeta(issueRefsKey, true));
+  }, [editor, issueSig]);
   const closeLink = useCallback(() => setLink(null), []);
 
   useEffect(() => {

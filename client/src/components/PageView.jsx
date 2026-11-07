@@ -6,10 +6,13 @@ import Attachments from './Attachments.jsx';
 import EmojiPicker from './EmojiPicker.jsx';
 import HistoryModal from './HistoryModal.jsx';
 import PageOutline from './PageOutline.jsx';
-import { Star, MoveHorizontal, History, Download, Share2, FilePlus2, Copy, Trash2, Waypoints, Lightbulb } from 'lucide-react';
+import { Star, MoveHorizontal, History, Download, Share2, FilePlus2, Copy, Trash2, Waypoints, Lightbulb, ListChecks } from 'lucide-react';
 import CanvasView from './canvas/CanvasView.jsx';
 import LocalGraphPanel from './graph/LocalGraphPanel.jsx';
 import IdeaView from './ideas/IdeaView.jsx';
+import { IssueFields, IssueActivity, IssueRefLink, useIssue } from './issues/IssuePanel.jsx';
+import NewIssueDialog from './issues/NewIssueDialog.jsx';
+import { LINK_INVERSE } from './issues/model.js';
 
 const ICON = { size: 16, strokeWidth: 1.8 };
 import { TagEditor } from './Tags.jsx';
@@ -68,6 +71,7 @@ export default function PageView({
   onFavorite,
   onWorkspaceSeen,
   allTags = [],
+  members = [],
 }) {
   const { id } = useParams();
   const navigate = useNavigate();
@@ -87,6 +91,8 @@ export default function PageView({
   const [prefsOverride, setPrefsOverride] = useState({}); // cambio local hasta que llegue el árbol
   const [tagsOverride, setTagsOverride] = useState(null);
   const [backlinks, setBacklinks] = useState([]);
+  const [pageIssues, setPageIssues] = useState({ linked: [], mentioned: [] }); // elementos que la relacionan
+  const [newIssue, setNewIssue] = useState(null); // diálogo "crear elemento" desde esta página
   const [localGraph, setLocalGraph] = useState(() => {
     try {
       return localStorage.getItem('nn:localgraph') === 'on';
@@ -301,6 +307,10 @@ export default function PageView({
       .backlinks(id)
       .then((r) => !cancelled && setBacklinks(r))
       .catch(() => {});
+    api
+      .pageIssues(id)
+      .then((r) => !cancelled && setPageIssues(r))
+      .catch(() => {});
     return () => {
       cancelled = true;
     };
@@ -370,12 +380,27 @@ export default function PageView({
     setDraftOffer(null);
   };
 
+  const issue = useIssue(id, page?.kind === 'issue', pageEvent);
+
   if (!page) return <div className="page-loading">Cargando…</div>;
 
   const crumbs = breadcrumb(pages, id);
   const isCanvas = page.kind === 'canvas';
   const isIdea = page.kind === 'idea';
-  const isDoc = !isCanvas && !isIdea;
+  const isIssue = page.kind === 'issue';
+  const isDoc = !isCanvas && !isIdea && !isIssue;
+  const hasEditor = !isCanvas && !isIdea; // documentos y descripción de elementos
+
+  // "Crear elemento" desde una página: la selección sirve de título
+  const openNewIssue = () => {
+    const ed = editorRef.current;
+    let text = '';
+    if (ed) {
+      const { from, to } = ed.state.selection;
+      if (to > from) text = ed.state.doc.textBetween(from, to, ' ').trim().slice(0, 300);
+    }
+    setNewIssue({ title: text });
+  };
 
   // "Desarrollar como idea": la selección del editor (o la página entera) pasa
   // a ser la semilla de una idea nueva, con enlace a esta página como origen
@@ -514,6 +539,13 @@ export default function PageView({
               <span className="crumb-sep">/</span>
             </span>
           )}
+          {isIssue && (
+            <span>
+              <Link to="/issues">📋 Seguimiento</Link>
+              <span className="crumb-sep">/</span>
+              {issue.detail && <span className="issue-key">{issue.detail.key}</span>}
+            </span>
+          )}
           {crumbs.map((c, i) => (
             <span key={c.id}>
               {i > 0 && <span className="crumb-sep">/</span>}
@@ -565,6 +597,11 @@ export default function PageView({
             </button>
           )}
           {isDoc && (
+            <button className="btn" onClick={openNewIssue} title="Crear elemento de seguimiento (bloqueo, problema, tarea…) relacionado con esta página; la selección se usa como título">
+              <ListChecks {...ICON} />
+            </button>
+          )}
+          {hasEditor && (
             <button
               className={'btn' + (fullWidth ? ' active' : '')}
               onClick={() => setPref('full_width', !fullWidth)}
@@ -576,7 +613,7 @@ export default function PageView({
           <button className="btn" onClick={() => setHistoryOpen(true)} title="Historial de versiones">
             <History {...ICON} />
           </button>
-          {isDoc && (
+          {hasEditor && (
             <button className="btn" onClick={exportMarkdown} title="Exportar como Markdown">
               <Download {...ICON} /> MD
             </button>
@@ -607,14 +644,16 @@ export default function PageView({
               </div>
             )}
           </div>
-          {!isIdea && (
+          {!isIdea && !isIssue && (
             <button className="btn" onClick={() => onCreateChild(id)} title="Añadir subpágina">
               <FilePlus2 {...ICON} />
             </button>
           )}
-          <button className="btn" onClick={() => onDuplicate(id)} title="Duplicar página">
-            <Copy {...ICON} />
-          </button>
+          {!isIssue && (
+            <button className="btn" onClick={() => onDuplicate(id)} title="Duplicar página">
+              <Copy {...ICON} />
+            </button>
+          )}
           <button className="btn danger" onClick={() => onDelete(id)} title="Mover a la papelera">
             <Trash2 {...ICON} />
           </button>
@@ -649,6 +688,18 @@ export default function PageView({
         </div>
 
         <TagEditor tags={pageTags} allTags={allTags} onChange={changeTags} />
+
+        {isIssue && issue.detail && (
+          <IssueFields
+            detail={issue.detail}
+            members={members}
+            onUpdate={async (patch) => {
+              await issue.update(patch);
+              onTreeChange();
+            }}
+          />
+        )}
+        {isIssue && issue.error && <div className="issue-error">⚠ {issue.error}</div>}
 
         {isIdea ? (
           <IdeaView
@@ -692,6 +743,37 @@ export default function PageView({
 
         {!isCanvas && <Attachments pageId={id} files={files} onChange={setFiles} />}
 
+        {isIssue && issue.detail && (
+          <IssueActivity
+            detail={issue.detail}
+            pages={pages}
+            onChanged={async () => {
+              await issue.load();
+              onTreeChange();
+            }}
+          />
+        )}
+
+        {!isIssue && (pageIssues.linked.length > 0 || pageIssues.mentioned.length > 0) && (
+          <section className="backlinks page-issues">
+            <div className="backlinks-title">📋 Elementos de seguimiento</div>
+            {pageIssues.linked.map((l) => (
+              <div key={`l${l.link_id}`} className="page-issue-row">
+                <span className="page-issue-rel">{l.type === 'documents' ? 'Lo documenta' : l.type === 'origin' ? 'Salió de aquí' : LINK_INVERSE[l.type]}</span>
+                <IssueRefLink t={l.issue} />
+              </div>
+            ))}
+            {pageIssues.mentioned
+              .filter((m) => !pageIssues.linked.some((l) => l.issue.id === m.id))
+              .map((m) => (
+                <div key={`m${m.id}`} className="page-issue-row">
+                  <span className="page-issue-rel">Mencionado</span>
+                  <IssueRefLink t={m} />
+                </div>
+              ))}
+          </section>
+        )}
+
         {!isCanvas && backlinks.length > 0 && (
           <section className="backlinks">
             <div className="backlinks-title">↩ Enlazada desde</div>
@@ -703,10 +785,25 @@ export default function PageView({
           </section>
         )}
       </div>
-      {isDoc && <PageOutline editor={editor} />}
+      {hasEditor && <PageOutline editor={editor} />}
       </div>
 
       {localGraph && <LocalGraphPanel pageId={id} pages={pages} onClose={toggleLocalGraph} />}
+
+      {newIssue && (
+        <NewIssueDialog
+          initial={{ title: newIssue.title }}
+          context={{ id, title: page.title, icon: page.icon, type: 'origin' }}
+          members={members}
+          onClose={() => setNewIssue(null)}
+          onCreate={async (body) => {
+            const d = await api.createIssue(body);
+            setNewIssue(null);
+            await onTreeChange();
+            navigate(`/p/${d.page_id}`);
+          }}
+        />
+      )}
 
       {historyOpen && <HistoryModal pageId={id} onClose={() => setHistoryOpen(false)} onRestored={onVersionRestored} />}
     </div>

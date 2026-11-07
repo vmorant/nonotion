@@ -36,6 +36,15 @@ import {
   ideaDigest,
 } from './idea.js';
 
+import {
+  mountIssues,
+  issueDetail,
+  issueHeaderMarkdown,
+  issueRelationsMarkdown,
+  issueTimelineMarkdown,
+  STATUS_LABELS as ISSUE_STATUS_LABELS,
+} from './issues.js';
+
 // Páginas a las que apunta un contenido, sea documento, canvas o idea
 const pageLinks = (content) => (parseIdea(content) ? ideaLinkedPageIds(content) : linkedPageIds(content));
 
@@ -201,7 +210,9 @@ app.get('/api/pages', (req, res) => {
     .prepare(
       `SELECT id, parent_id, title, icon, position, updated_at, created_at, page_date, kind,
               share_token IS NOT NULL AS shared, full_width, ${TAGS_COLUMN},
-              (SELECT created_at FROM favorites f WHERE f.page_id = pages.id AND f.github_login = ?) AS favorite_at
+              (SELECT created_at FROM favorites f WHERE f.page_id = pages.id AND f.github_login = ?) AS favorite_at,
+              (SELECT w.issue_prefix || '-' || i.number FROM issues i JOIN workspaces w ON w.id = i.workspace_id WHERE i.page_id = pages.id) AS issue_key,
+              (SELECT i.status FROM issues i WHERE i.page_id = pages.id) AS issue_status
        FROM pages WHERE trashed_at IS NULL AND workspace_id = ? ORDER BY position, created_at`
     )
     .all(loginOf(req) || '', req.ws);
@@ -309,6 +320,18 @@ app.get('/api/graph', (req, res) => {
       if (target !== p.id && alive.has(target)) links.push({ source: p.id, target });
     }
   }
+  // Relaciones de seguimiento (bloquea, documentado en…) con su tipo
+  for (const l of db
+    .prepare(`SELECT l.issue_id, l.target_id, l.type FROM issue_links l JOIN issues i ON i.page_id = l.issue_id WHERE i.workspace_id = ?`)
+    .all(req.ws)) {
+    if (alive.has(l.issue_id) && alive.has(l.target_id)) links.push({ source: l.issue_id, target: l.target_id, rel: l.type });
+  }
+  const issueInfo = new Map(
+    db
+      .prepare(`SELECT i.page_id, i.number, i.status, i.type, w.issue_prefix FROM issues i JOIN workspaces w ON w.id = i.workspace_id WHERE i.workspace_id = ?`)
+      .all(req.ws)
+      .map((r) => [r.page_id, { key: `${r.issue_prefix}-${r.number}`, status: r.status, issue_type: r.type }])
+  );
   const files = db
     .prepare(
       `SELECT f.id, f.name, f.mime, f.page_id, f.created_at FROM files f JOIN pages p ON p.id = f.page_id
@@ -316,13 +339,30 @@ app.get('/api/graph', (req, res) => {
     )
     .all(req.ws);
   res.json({
-    pages: pages.map(({ content, tags, ...p }) => ({ ...p, tags: splitTags(tags) })),
+    pages: pages.map(({ content, tags, ...p }) => ({ ...p, tags: splitTags(tags), ...(issueInfo.get(p.id) || {}) })),
     links,
     files,
   });
 });
 
 mountTags(app, { notifyTree });
+
+// Una idea que se convierte en elemento de seguimiento lo registra como resultado
+function addIdeaOutcome(req, ideaId, outcome) {
+  const page = db.prepare('SELECT * FROM pages WHERE id = ?').get(ideaId);
+  if (!page || page.kind !== 'idea') return;
+  const idea = patchIdea(page.content, { outcomes_add: [outcome] });
+  const text = ideaText(idea);
+  snapshotVersion(page, { throttled: false });
+  db.prepare(`UPDATE pages SET content = ?, content_text = ?, rev = rev + 1, updated_at = datetime('now') WHERE id = ?`).run(
+    JSON.stringify(idea),
+    text,
+    page.id
+  );
+  ftsUpsert(page.id, page.title, text);
+  notifyPage(req, page.id);
+}
+mountIssues(app, { notifyTree, notifyPage, onIdeaOutcome: addIdeaOutcome });
 
 function snapshotVersion(page, { throttled }) {
   if (throttled) {
@@ -492,6 +532,7 @@ app.post('/api/move-pages', (req, res) => {
 app.post('/api/pages/:id/duplicate', (req, res) => {
   const orig = db.prepare('SELECT * FROM pages WHERE id = ?').get(req.params.id);
   if (!orig) return res.status(404).json({ error: 'Página no encontrada' });
+  if (orig.kind === 'issue') return res.status(400).json({ error: 'Un elemento de seguimiento no se duplica: crea uno nuevo y relaciónalo' });
 
   const insertPage = db.prepare(
     `INSERT INTO pages (id, parent_id, title, icon, content, content_text, position, workspace_id, kind)
@@ -1182,6 +1223,7 @@ app.post('/api/pages/:id/idea', async (req, res) => {
         if (!target) throw new IdeaError(`La página ${o.page_id} no existe en este espacio`);
         if (o.page_id === page0.id) throw new IdeaError('Una idea no puede ser su propio resultado');
         if (target.kind === 'canvas' && o.type === 'page') o.type = 'canvas';
+        if (target.kind === 'issue' && o.type === 'page') o.type = 'issue';
       }
       if (o.file_id && !fileInWs(o.file_id, req.ws)) throw new IdeaError(`El archivo ${o.file_id} no existe en este espacio`);
     }
@@ -1573,6 +1615,10 @@ app.get('/api/share/:token', (req, res) => {
   page.files = db
     .prepare('SELECT id, name, mime, size FROM files WHERE page_id = ? AND deleted_at IS NULL ORDER BY created_at')
     .all(page.id);
+  if (page.kind === 'issue') {
+    const d = issueDetail(page.id);
+    if (d) page.issue = { key: d.key, type: d.type, status: d.status, priority: d.priority, assignee: d.assignee, due_date: d.due_date, milestone: d.milestone };
+  }
   res.json(page);
 });
 
@@ -1615,7 +1661,7 @@ app.get('/api/export', async (req, res) => {
   const canvases = []; // se escriben al final, cuando ya se conocen todas las rutas
 
   const addPages = async (parentId, dir, depth) => {
-    const kids = (childrenMap.get(parentId) || []).filter((p) => p.kind !== 'idea');
+    const kids = (childrenMap.get(parentId) || []).filter((p) => p.kind !== 'idea' && p.kind !== 'issue');
     const usedNames = new Set();
     for (const page of kids) {
       let base = sanitizeName(page.title);
@@ -1685,6 +1731,29 @@ app.get('/api/export', async (req, res) => {
       }).join('\n') + '\n';
     }
     archive.append(md, { name: `Ideas/${candidate}.md` });
+  }
+
+  // Elementos de seguimiento: campos, descripción, relaciones y cronología
+  const issueNames = new Set();
+  for (const page of pages.filter((p) => p.kind === 'issue')) {
+    const d = issueDetail(page.id);
+    if (!d) continue;
+    let candidate = sanitizeName(`${d.key} ${page.title || ''}`);
+    let n = 2;
+    while (issueNames.has(candidate.toLowerCase())) candidate = sanitizeName(`${d.key} ${page.title || ''} (${n++})`);
+    issueNames.add(candidate.toLowerCase());
+    let body = await docToMarkdown(page.content);
+    body = body.replace(/\/files\/([A-Za-z0-9_-]{21})\/[^\s)>"']*/g, (match, fid) => {
+      const f = fileById.get(fid);
+      if (!f) return match;
+      usedFiles.add(fid);
+      return '../' + fileEntryName(f);
+    });
+    const md =
+      `# ${page.icon ? page.icon + ' ' : ''}${d.key} ${page.title || 'Sin título'}\n\n${issueHeaderMarkdown(d)}\n\n` +
+      `## Descripción\n\n${body.trim() || '_(sin descripción)_'}\n\n## Relaciones\n\n${issueRelationsMarkdown(d)}\n\n` +
+      `## Cronología\n\n${issueTimelineMarkdown(d)}\n`;
+    archive.append(md, { name: `Seguimiento/${candidate}.md` });
   }
 
   // Canvas en formato JSON Canvas (.canvas), como Obsidian: las páginas y los

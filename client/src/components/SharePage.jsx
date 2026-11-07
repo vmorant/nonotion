@@ -7,6 +7,7 @@ import FileViewer, { previewKind } from './FileViewer.jsx';
 import { fileFromHref } from '../fileLinks.js';
 import CanvasView from './canvas/CanvasView.jsx';
 import IdeaView from './ideas/IdeaView.jsx';
+import { STATUS_LABELS as ISSUE_STATUS, TYPE_LABELS as ISSUE_TYPE, PRIORITY_LABELS as ISSUE_PRIO } from './issues/model.js';
 
 export default function SharePage() {
   const { token } = useParams();
@@ -58,6 +59,16 @@ export default function SharePage() {
           <span className="page-icon">{page.icon || '📄'}</span>
           <h1 className="page-title-static">{page.title || 'Sin título'}</h1>
         </div>
+        {page.issue && (
+          <div className="issue-fields readonly">
+            <span className="issue-key big">{page.issue.key}</span>
+            <span className={`issue-status status-${page.issue.status}`}>{ISSUE_STATUS[page.issue.status]}</span>
+            <span>{ISSUE_TYPE[page.issue.type]}</span>
+            <span>Prioridad {ISSUE_PRIO[page.issue.priority]}</span>
+            {page.issue.assignee && <span>· {page.issue.assignee}</span>}
+            {page.issue.due_date && <span>· vence {page.issue.due_date}</span>}
+          </div>
+        )}
         {page.kind === 'idea' ? (
           <IdeaView pageId={page.id} title={page.title} initialContent={page.content} files={page.files || []} readOnly />
         ) : page.kind === 'canvas' ? (

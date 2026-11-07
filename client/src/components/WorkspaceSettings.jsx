@@ -20,6 +20,7 @@ export default function WorkspaceSettings({ workspace, owner, me, onChanged, onD
   const isAdmin = workspace?.role === 'admin';
   const [name, setName] = useState(workspace?.name || '');
   const [icon, setIcon] = useState(workspace?.icon || '🗂️');
+  const [prefix, setPrefix] = useState(workspace?.issue_prefix || '');
   const [members, setMembers] = useState({ owners: [], members: [] });
   const [tokens, setTokens] = useState([]);
   const [newLogin, setNewLogin] = useState('');
@@ -88,7 +89,7 @@ export default function WorkspaceSettings({ workspace, owner, me, onChanged, onD
             onSubmit={(e) => {
               e.preventDefault();
               run(async () => {
-                await api.updateWorkspace(workspace.id, { name, icon });
+                await api.updateWorkspace(workspace.id, { name, icon, ...(prefix && prefix !== workspace.issue_prefix ? { issue_prefix: prefix } : {}) });
                 await onChanged();
               });
             }}
@@ -97,6 +98,18 @@ export default function WorkspaceSettings({ workspace, owner, me, onChanged, onD
             <input className="ws-input" value={name} onChange={(e) => setName(e.target.value)} disabled={!isAdmin} maxLength={60} />
             {isAdmin && <button className="btn primary">Guardar</button>}
           </form>
+          <label className="ws-prefix">
+            <span>Prefijo de seguimiento</span>
+            <input
+              className="ws-input ws-prefix-input"
+              value={prefix}
+              placeholder="AXA"
+              maxLength={10}
+              disabled={!isAdmin}
+              onChange={(e) => setPrefix(e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, ''))}
+            />
+            <span className="ws-hint">Claves de los elementos: {prefix || 'AXA'}-12. Si lo cambias, las menciones con el prefijo antiguo dejan de enlazarse.</span>
+          </label>
         </Section>
 
         <Section

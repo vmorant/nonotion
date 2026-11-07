@@ -336,3 +336,106 @@ test('ideas por MCP: crear, desarrollar, materializar, leer y protecciones', asy
   assert.match(r.text, new RegExp(`captura captura\\.png \\(file_id: ${up.id}\\)`));
   assert.match(r.text, new RegExp(`captura\\.png \\(file_id: ${up.id}, image/png`), 'y aparece como adjunto para read_attachment');
 });
+
+test('seguimiento por MCP: crear, listar, actualizar, relacionar, bloquear y leer', async () => {
+  const { tools } = await rpc('tools/list', {});
+  const names = tools.map((t) => t.name);
+  for (const n of ['list_issues', 'create_issue', 'update_issue', 'link_issue']) assert.ok(names.includes(n), `${n} registrada`);
+
+  const acta = await api('/api/capture', { title: 'Acta comité AXA', markdown: 'Se acuerda revisar permisos' });
+  const doc = await api('/api/capture', { title: 'Arquitectura AXA', markdown: 'Diseño de la plataforma' });
+  let r = await call('create_issue', {
+    title: 'Falta acceso a Unity Catalog',
+    type: 'blocker',
+    priority: 'high',
+    assignee: 'Equipo AXA',
+    due_date: '2026-11-20',
+    description: 'Sin permisos **no** se puede seguir con la ingesta',
+    links: [
+      { type: 'origin', target: acta.id },
+      { type: 'documents', target: doc.id },
+    ],
+    tags: ['Permisos'],
+  });
+  assert.equal(r.isError, false, r.text);
+  const m = r.text.match(/Elemento creado: ([A-Z0-9]+-(\d+)) .*\(id: ([A-Za-z0-9_-]+)/);
+  assert.ok(m, r.text);
+  const [, key1, , id1] = m;
+  const prefix = key1.split('-')[0];
+
+  r = await call('create_issue', { title: 'Migrar tablas de siniestros', type: 'task' });
+  const key2 = r.text.match(/Elemento creado: ([A-Z0-9]+-\d+)/)[1];
+  assert.equal(Number(key2.split('-')[1]), Number(key1.split('-')[1]) + 1, 'números consecutivos por espacio');
+
+  // bloquea: por clave; un ciclo se rechaza
+  r = await call('link_issue', { issue: key1, type: 'blocks', target: key2 });
+  assert.equal(r.isError, false, r.text);
+  r = await call('link_issue', { issue: key2, type: 'blocks', target: key1 });
+  assert.match(r.text, /ciclo/);
+  r = await call('link_issue', { issue: key1, type: 'blocks', target: doc.id });
+  assert.match(r.text, /solo se usa entre elementos/);
+
+  // list_issues: filtros y bloqueos
+  r = await call('list_issues', { blocked_only: true });
+  assert.match(r.text, new RegExp(`${key2} Migrar tablas de siniestros .*⛔ bloqueado por 1`));
+  r = await call('list_issues', { type: 'blocker', status: 'active' });
+  assert.match(r.text, new RegExp(`${key1} Falta acceso`));
+  assert.doesNotMatch(r.text, new RegExp(key2));
+
+  // read_page de un elemento: campos, descripción, relaciones, cronología
+  r = await call('read_page', { page_id: id1 });
+  assert.match(r.text, /ELEMENTO DE SEGUIMIENTO/);
+  assert.match(r.text, new RegExp(`\\*\\*${key1}\\*\\* · Bloqueo · estado: \\*\\*Abierto\\*\\* · prioridad: Alta · responsable: Equipo AXA · fecha límite: 2026-11-20`));
+  assert.match(r.text, /Sin permisos \*\*no\*\* se puede seguir/);
+  assert.match(r.text, /Viene de: «Acta comité AXA»/);
+  assert.match(r.text, /Documentado en: «Arquitectura AXA»/);
+  assert.match(r.text, new RegExp(`Bloquea a: ${key2} «Migrar tablas de siniestros» \\[Abierto\\]`));
+  assert.match(r.text, /Claude: creó el elemento/);
+
+  // update_issue: cambios y comentario en la cronología
+  r = await call('update_issue', { issue: key1, status: 'in_progress', assignee: 'vmorant', comment: 'IT confirma que lo tramita' });
+  assert.equal(r.isError, false, r.text);
+  r = await call('read_page', { page_id: id1 });
+  assert.match(r.text, /estado: Abierto → En curso/);
+  assert.match(r.text, /responsable: Equipo AXA → vmorant/);
+  assert.match(r.text, /comentó:\n {4}IT confirma que lo tramita/);
+  assert.match((await call('update_issue', { issue: key1, status: 'hecho' })).text, /Invalid|no válido|invalid/i);
+  assert.match((await call('update_issue', { issue: `${prefix}-999` })).text, /No hay ningún elemento/);
+
+  // la descripción admite Markdown normal (no es como canvas o ideas)
+  assert.equal((await call('append_to_page', { page_id: id1, markdown: 'Actualización: pedido el rol' })).isError, false);
+
+  // menciones por clave en una página cualquiera
+  const nota = await api('/api/capture', { title: 'Nota de seguimiento', markdown: `Pendiente de ${key2} y de ${key1}0 (no existe)` });
+  const forPage = await api(`/api/pages/${nota.id}/issues`);
+  assert.deepEqual(forPage.mentioned.map((x) => x.key), [key2]);
+  const forDoc = await api(`/api/pages/${doc.id}/issues`);
+  assert.deepEqual(forDoc.linked.map((l) => [l.type, l.issue.key]), [['documents', key1]]);
+
+  // resolver el bloqueante desbloquea al otro
+  await call('update_issue', { issue: key1, status: 'resolved' });
+  r = await call('list_issues', { blocked_only: true });
+  assert.doesNotMatch(r.text, new RegExp(key2));
+
+  // búsqueda por clave, grafo y fuera del árbol
+  assert.ok((await api(`/api/search?q=${key2}`)).some((p) => p.title === 'Migrar tablas de siniestros'));
+  const g = await api('/api/graph');
+  assert.ok(g.links.some((l) => l.source === id1 && l.rel === 'blocks'));
+  assert.ok(g.pages.some((p) => p.id === id1 && p.key === key1 && p.status === 'resolved'));
+  assert.match((await call('list_pages', {})).text, /Elementos de seguimiento \(fuera del árbol\): 2/);
+  assert.match((await call('move_page', { page_id: id1, new_parent_id: null })).text, /elemento de seguimiento/);
+  assert.match((await call('move_page', { page_id: nota.id, new_parent_id: id1 })).text, /no puede contener/);
+  assert.equal((await api('/api/pages', { title: 'Bajo elemento', parent_id: id1 })).error !== undefined, true);
+
+  // idea → elemento: queda como resultado de la idea y enlazado como origen
+  const idea = (await call('create_idea', { seed_text: 'Automatizar altas de usuarios' })).text.match(/id: ([A-Za-z0-9_-]+)/)[1];
+  r = await call('create_issue', { title: 'Automatizar altas', from_idea_id: idea });
+  assert.equal(r.isError, false, r.text);
+  const key3 = r.text.match(/Elemento creado: ([A-Z0-9]+-\d+)/)[1];
+  const ideaDoc = JSON.parse((await api(`/api/pages/${idea}`)).content);
+  assert.equal(ideaDoc.outcomes.at(-1).type, 'issue');
+  assert.equal(ideaDoc.outcomes.at(-1).label, key3);
+  assert.equal(ideaDoc.status, 'documented');
+  r = await call('read_page', { page_id: idea });
+  assert.match(r.text, new RegExp(`Elemento «${key3}»`));
+});

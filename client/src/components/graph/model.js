@@ -10,6 +10,7 @@ export const DEFAULTS = {
   showOrphans: true,
   showHierarchy: true, // extra de NoNotion: enlaces padre → hija del árbol
   showIdeas: true, // ideas (fuera del árbol) y sus enlaces a páginas
+  showIssues: true, // elementos de seguimiento y sus relaciones (bloquea, documentado en…)
   // Grupos: [{ query, color }]
   groups: [],
   // Visualización
@@ -61,18 +62,22 @@ export function buildGraph(data, settings, { focusId = null } = {}) {
     return parts.join(' / ');
   };
 
-  const pagesShown = s.showIdeas ? data.pages : data.pages.filter((p) => p.kind !== 'idea');
+  const pagesShown = data.pages.filter((p) => (s.showIdeas || p.kind !== 'idea') && (s.showIssues || p.kind !== 'issue'));
   const shownIds = new Set(pagesShown.map((p) => p.id));
   let nodes = pagesShown.map((p) => ({
     id: p.id,
-    kind: p.kind === 'canvas' ? 'canvas' : p.kind === 'idea' ? 'idea' : 'page',
-    label: p.title || 'Sin título',
+    kind: p.kind === 'canvas' ? 'canvas' : p.kind === 'idea' ? 'idea' : p.kind === 'issue' ? 'issue' : 'page',
+    status: p.status,
+    key: p.key,
+    label: p.key ? `${p.key} ${p.title || 'Sin título'}` : p.title || 'Sin título',
     icon: p.icon,
     tags: p.tags || [],
     created: p.created_at,
     path: pathOf(p),
   }));
-  let links = data.links.filter((l) => shownIds.has(l.source) && shownIds.has(l.target)).map((l) => ({ source: l.source, target: l.target, type: 'link' }));
+  let links = data.links
+    .filter((l) => shownIds.has(l.source) && shownIds.has(l.target))
+    .map((l) => ({ source: l.source, target: l.target, type: 'link', rel: l.rel }));
   if (s.showHierarchy) {
     for (const p of pagesShown) {
       if (p.parent_id && shownIds.has(p.parent_id)) links.push({ source: p.parent_id, target: p.id, type: 'tree' });
@@ -106,7 +111,7 @@ export function buildGraph(data, settings, { focusId = null } = {}) {
   // Sin duplicados (dos enlaces iguales cuentan como uno)
   const seen = new Set();
   links = links.filter((l) => {
-    const k = `${l.source}>${l.target}>${l.type}`;
+    const k = `${l.source}>${l.target}>${l.type}>${l.rel || ''}`;
     if (seen.has(k)) return false;
     seen.add(k);
     return true;

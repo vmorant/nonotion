@@ -12,6 +12,18 @@ import db, { DATA_DIR } from './db.js';
 import { lookupToken } from './workspaces.js';
 import { normalizeTag } from './tags.js';
 import { markdownToDoc } from './markdown.js';
+import {
+  issueHeaderMarkdown,
+  issueRelationsMarkdown,
+  issueTimelineMarkdown,
+  STATUSES as ISSUE_STATUSES,
+  TYPES as ISSUE_TYPES,
+  PRIORITIES as ISSUE_PRIORITIES,
+  LINK_TYPES as ISSUE_LINK_TYPES,
+  STATUS_LABELS as ISSUE_STATUS_LABELS,
+  TYPE_LABELS as ISSUE_TYPE_LABELS,
+  PRIORITY_LABELS as ISSUE_PRIORITY_LABELS,
+} from './issues.js';
 
 const TEXT_LIMIT = 200 * 1024; // 200 KB para adjuntos de texto
 const IMAGE_LIMIT = 4 * 1024 * 1024; // 4 MB para imágenes
@@ -158,10 +170,13 @@ export function mountMcp(app, port) {
         try {
           const all = await (await api('/api/pages')).json();
           const ideas = all.filter((p) => p.kind === 'idea');
-          const pages = all.filter((p) => p.kind !== 'idea');
+          const issues = all.filter((p) => p.kind === 'issue');
+          const pages = all.filter((p) => p.kind !== 'idea' && p.kind !== 'issue');
           const ws = (await (await api('/api/workspaces')).json()).workspaces?.[0];
           let head = ws ? `Espacio: ${ws.icon || ''} ${ws.name} (este conector solo ve este espacio)\n` : '';
-          head += ideas.length ? `Ideas en desarrollo (fuera del árbol): ${ideas.length} → list_ideas\n\n` : '\n';
+          head += ideas.length ? `Ideas en desarrollo (fuera del árbol): ${ideas.length} → list_ideas\n` : '';
+          head += issues.length ? `Elementos de seguimiento (fuera del árbol): ${issues.length} → list_issues\n` : '';
+          head += '\n';
           if (!pages.length) return ok(head + 'No hay páginas todavía.');
           const children = new Map();
           for (const p of pages) {
@@ -202,8 +217,17 @@ export function mountMcp(app, port) {
           out += p.tags?.length ? `Etiquetas: ${p.tags.map((t) => '#' + t).join(' ')}\n\n` : '\n';
           if (p.kind === 'canvas') out += '(Esta página es un CANVAS: edítala con update_canvas, no con append/edit/update_page)\n\n';
           if (p.kind === 'idea') out += '(Esta página es una IDEA: trabájala con develop_idea y materialize_idea, no con append/edit/update_page)\n\n';
+          let issue = null;
+          if (p.kind === 'issue') {
+            issue = await (await api(`/api/pages/${page_id}/issue`)).json();
+            out +=
+              `(Esta página es un ELEMENTO DE SEGUIMIENTO: cambia estado y campos o comenta con update_issue, relaciónalo con link_issue; la descripción es Markdown normal y admite append/edit/update_page)\n\n` +
+              issueHeaderMarkdown(issue) +
+              '\n\n## Descripción\n\n';
+          }
           out += p.markdown || '(página vacía)';
           if (p.kind === 'canvas') out += `\n\n---\nJSON Canvas:\n\`\`\`json\n${JSON.stringify(p.canvas)}\n\`\`\``;
+          if (issue) out += `\n\n## Relaciones\n\n${issueRelationsMarkdown(issue)}\n\n## Cronología\n\n${issueTimelineMarkdown(issue)}`;
           if (p.files?.length) {
             out +=
               '\n\n---\nAdjuntos:\n' +
@@ -590,7 +614,7 @@ export function mountMcp(app, port) {
     });
     const outcomeSchema = z.object({
       type: z
-        .enum(['page', 'canvas', 'plan', 'file', 'external'])
+        .enum(['page', 'canvas', 'plan', 'issue', 'file', 'external'])
         .describe('page: página de NoNotion; canvas: diagrama/mapa (create_canvas); plan: página de planificación (tareas, hitos, fechas); file: archivo adjunto (attach_file: Word, Excel…); external: documento fuera de NoNotion (Google Docs, etc.)'),
       page_id: z.string().optional().describe('Id de la página/canvas/plan creado (page, canvas, plan)'),
       file_id: z.string().optional().describe('file_id del adjunto (file)'),
@@ -714,7 +738,7 @@ export function mountMcp(app, port) {
           const page = await (await api(`/api/pages/${page_id}`)).json();
           if (page.kind !== 'idea') return fail(new Error('Esa página no es una idea (list_ideas las lista)'));
           for (const o of outcomes) {
-            if (['page', 'canvas', 'plan'].includes(o.type) && !o.page_id) return fail(new Error(`Resultado "${o.type}": falta page_id`));
+            if (['page', 'canvas', 'plan', 'issue'].includes(o.type) && !o.page_id) return fail(new Error(`Resultado "${o.type}": falta page_id`));
             if (o.type === 'file' && !o.file_id) return fail(new Error('Resultado "file": falta file_id'));
             if (o.type === 'external' && !o.url) return fail(new Error('Resultado "external": falta url'));
           }
@@ -725,6 +749,154 @@ export function mountMcp(app, port) {
             `Idea "${r.title}" materializada (${r.idea.status}): ${r.idea.outcomes.length} resultado(s) en total:\n` +
               r.idea.outcomes.map((o) => `- ${o.type}${o.label ? ` «${o.label}»` : ''}: ${o.page_id ? `/p/${o.page_id}` : o.url || o.file_id}`).join('\n')
           );
+        } catch (e) {
+          return fail(e);
+        }
+      }
+    );
+
+    // ---------- Seguimiento (issues): bloqueos, problemas, riesgos, tareas… ----------
+    const issueRef = z.string().describe('Clave del elemento (p. ej. "AXA-12") o su id de página');
+    const resolveIssue = async (ref) => {
+      const s = String(ref || '').trim();
+      if (/^[A-Za-z][A-Za-z0-9]{0,9}-\d+$/.test(s)) {
+        const r = await (await api(`/api/issues?key=${encodeURIComponent(s)}`)).json();
+        if (!r.issues.length) throw new Error(`No hay ningún elemento ${s} en este espacio`);
+        return r.issues[0].id;
+      }
+      return s;
+    };
+    const linkSchema = z.object({
+      type: z
+        .enum(ISSUE_LINK_TYPES)
+        .describe('blocks = este elemento bloquea a otro elemento; relates = relacionado; documents = documentado en una página; origin = viene de (idea, acta de reunión, página)'),
+      target: z.string().describe('Id de la página o clave del elemento destino (AXA-7)'),
+    });
+    const issueLine = (i) =>
+      `- ${i.key} ${i.title} · ${ISSUE_TYPE_LABELS[i.type]} · ${ISSUE_STATUS_LABELS[i.status]} · ${ISSUE_PRIORITY_LABELS[i.priority]}` +
+      `${i.assignee ? ` · ${i.assignee}` : ''}${i.due_date ? ` · vence ${i.due_date}` : ''}${i.blocked_by_open ? ` · ⛔ bloqueado por ${i.blocked_by_open}` : ''} (id: ${i.id})`;
+
+    server.registerTool(
+      'list_issues',
+      {
+        title: 'Listar elementos de seguimiento',
+        description:
+          'Lista los elementos de seguimiento del espacio (bloqueos, problemas, riesgos, tareas, decisiones, preguntas) con clave (AXA-12), estado, prioridad, responsable y fecha. Úsala para "¿qué está bloqueado?", "¿qué tengo abierto?", o antes de crear uno para no duplicarlo.',
+        inputSchema: {
+          status: z.string().optional().describe('Estados separados por comas (open, in_progress, blocked, resolved, closed) o "active" = abiertos/en curso/bloqueados'),
+          type: z.string().optional().describe('Tipos separados por comas: blocker, problem, risk, task, decision, question'),
+          priority: z.string().optional().describe('low, medium, high, critical (separados por comas)'),
+          assignee: z.string().optional().describe('Texto del responsable, o "none" para los que no tienen'),
+          blocked_only: z.boolean().optional().describe('Solo lo bloqueado o bloqueante abierto'),
+          query: z.string().optional().describe('Texto en clave, título o responsable'),
+        },
+      },
+      async ({ status, type, priority, assignee, blocked_only, query }) => {
+        try {
+          const qs = new URLSearchParams();
+          if (status) qs.set('status', status);
+          if (type) qs.set('type', type);
+          if (priority) qs.set('priority', priority);
+          if (assignee) qs.set('assignee', assignee);
+          if (blocked_only) qs.set('blocked', 'true');
+          if (query) qs.set('q', query);
+          const r = await (await api(`/api/issues?${qs}`)).json();
+          if (!r.issues.length) return ok('No hay elementos que coincidan.');
+          return ok(`${r.issues.length} elemento(s) (prefijo ${r.prefix}):\n` + r.issues.map(issueLine).join('\n'));
+        } catch (e) {
+          return fail(e);
+        }
+      }
+    );
+
+    server.registerTool(
+      'create_issue',
+      {
+        title: 'Crear elemento de seguimiento',
+        description:
+          'Crea un elemento de seguimiento (bloqueo, problema, riesgo, tarea, decisión o pregunta) fuera del árbol de páginas, con su clave (AXA-12). Úsala solo cuando el usuario lo pida (p. ej. "apúntalo como bloqueo", "crea los elementos de esta reunión"); antes mira list_issues para no duplicar. Relaciónalo con las páginas de las que sale o que lo documentan.',
+        inputSchema: {
+          title: z.string().describe('Título corto y concreto'),
+          type: z.enum(ISSUE_TYPES).optional().describe('blocker, problem, risk, task (por defecto), decision, question'),
+          priority: z.enum(ISSUE_PRIORITIES).optional().describe('low, medium (por defecto), high, critical'),
+          status: z.enum(ISSUE_STATUSES).optional().describe('Por defecto open'),
+          assignee: z.string().optional().describe('Responsable (usuario de GitHub o nombre libre, p. ej. "Equipo AXA")'),
+          due_date: z.string().optional().describe('Fecha límite AAAA-MM-DD'),
+          milestone: z.string().optional().describe('Hito o fase'),
+          description: z.string().optional().describe('Descripción en Markdown: contexto, impacto, qué se necesita'),
+          links: z.array(linkSchema).optional().describe('Relaciones a crear'),
+          from_idea_id: z.string().optional().describe('Idea de la que sale: queda enlazada como origen y la idea lo registra como resultado'),
+          tags: z.array(z.string()).optional(),
+        },
+      },
+      async (args) => {
+        try {
+          const d = await (await api('/api/issues', { method: 'POST', body: JSON.stringify(args) })).json();
+          return ok(`Elemento creado: ${d.key} «${args.title}» (id: ${d.page_id}, ${ISSUE_TYPE_LABELS[d.type]}, ${ISSUE_STATUS_LABELS[d.status]}) con ${d.links.length} relación(es).`);
+        } catch (e) {
+          return fail(e);
+        }
+      }
+    );
+
+    server.registerTool(
+      'update_issue',
+      {
+        title: 'Actualizar elemento de seguimiento',
+        description:
+          'Cambia estado, tipo, prioridad, responsable, fecha, hito o título de un elemento y/o añade un comentario a su cronología. Cada cambio queda registrado con quién y cuándo. Úsala cuando el usuario lo pida o confirme (p. ej. "marca AXA-12 como resuelto", "comenta que IT ya dio acceso").',
+        inputSchema: {
+          issue: issueRef,
+          status: z.enum(ISSUE_STATUSES).optional(),
+          type: z.enum(ISSUE_TYPES).optional(),
+          priority: z.enum(ISSUE_PRIORITIES).optional(),
+          assignee: z.string().nullable().optional().describe('null o "" para quitarlo'),
+          due_date: z.string().nullable().optional().describe('AAAA-MM-DD, o null para quitarla'),
+          milestone: z.string().nullable().optional(),
+          title: z.string().optional(),
+          comment: z.string().optional().describe('Comentario en Markdown para la cronología'),
+        },
+      },
+      async ({ issue, ...rest }) => {
+        try {
+          const id = await resolveIssue(issue);
+          const body = { ...rest };
+          if (body.assignee === '') body.assignee = null;
+          if (body.due_date === '') body.due_date = null;
+          const d = await (await api(`/api/pages/${id}/issue`, { method: 'PATCH', body: JSON.stringify(body) })).json();
+          return ok(`${d.key} actualizado: ${ISSUE_STATUS_LABELS[d.status]} · ${ISSUE_PRIORITY_LABELS[d.priority]}${d.assignee ? ` · ${d.assignee}` : ''}${d.due_date ? ` · vence ${d.due_date}` : ''}.`);
+        } catch (e) {
+          return fail(e);
+        }
+      }
+    );
+
+    server.registerTool(
+      'link_issue',
+      {
+        title: 'Relacionar elemento de seguimiento',
+        description:
+          'Añade o quita una relación de un elemento: bloquea a otro elemento, relacionado con, documentado en una página, o viene de (idea, acta, página). Para quitar, pasa remove=true con el mismo tipo y destino.',
+        inputSchema: {
+          issue: issueRef,
+          type: linkSchema.shape.type,
+          target: linkSchema.shape.target,
+          remove: z.boolean().optional(),
+        },
+      },
+      async ({ issue, type, target, remove }) => {
+        try {
+          const id = await resolveIssue(issue);
+          if (remove) {
+            const d = await (await api(`/api/pages/${id}/issue`)).json();
+            const tid = /^[A-Za-z][A-Za-z0-9]{0,9}-\d+$/.test(target) ? await resolveIssue(target) : target;
+            const l = d.links.find((x) => x.type === type && x.target_id === tid);
+            if (!l) return fail(new Error('Esa relación no existe'));
+            await api(`/api/pages/${id}/issue/links/${l.id}`, { method: 'DELETE' });
+            return ok(`Relación quitada de ${d.key}.`);
+          }
+          const d = await (await api(`/api/pages/${id}/issue/links`, { method: 'POST', body: JSON.stringify({ type, target }) })).json();
+          return ok(`${d.key}: ${d.links.length} relación(es) salientes, ${d.incoming.length} entrantes.`);
         } catch (e) {
           return fail(e);
         }
