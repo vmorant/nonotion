@@ -74,6 +74,7 @@ function moveOne(ws, move) {
   // Las ideas viven fuera del árbol (vista Ideas): no se mueven ni contienen páginas
   if (page.kind === 'idea') throw new MoveError(`${label(page)} es una idea: las ideas no están en el árbol de páginas`);
   if (page.kind === 'issue') throw new MoveError(`${label(page)} es un ticket: vive dentro de su lista de seguimiento`);
+  if (page.kind === 'minutes') throw new MoveError(`${label(page)} es un acta: vive en la sección Actas (su proyecto se cambia en el acta)`);
   if (move.parent_id === undefined) {
     throw new MoveError('Falta el padre destino (usa null para mover a la raíz del espacio)');
   }
@@ -82,6 +83,7 @@ function moveOne(ws, move) {
   if (parentId !== null) {
     const parent = livePage(parentId, ws, 'destino');
     if (parent.kind === 'idea') throw new MoveError(`${label(parent)} es una idea: no puede contener páginas`);
+    if (parent.kind === 'minutes') throw new MoveError(`${label(parent)} es un acta: no puede contener páginas`);
     if (parent.kind === 'issue' || parent.kind === 'tracker') {
       throw new MoveError(`${label(parent)} es ${parent.kind === 'issue' ? 'un ticket' : 'una lista de seguimiento'}: no puede contener páginas`);
     }

@@ -13,6 +13,7 @@ import { lookupToken } from './workspaces.js';
 import { normalizeTag } from './tags.js';
 import { markdownToDoc } from './markdown.js';
 import { issueHeaderMarkdown, issueRelationsMarkdown, issueTimelineMarkdown } from './issues.js';
+import { minutesHeaderMarkdown, minutesItemsMarkdown } from './minutes.js';
 
 const TEXT_LIMIT = 200 * 1024; // 200 KB para adjuntos de texto
 const IMAGE_LIMIT = 4 * 1024 * 1024; // 4 MB para imágenes
@@ -162,11 +163,13 @@ export function mountMcp(app, port) {
           const issues = all.filter((p) => p.kind === 'issue');
           const trackersN = all.filter((p) => p.kind === 'tracker').length;
           // las listas sin página no están en el árbol (solo en Seguimiento: list_trackers)
-          const pages = all.filter((p) => p.kind !== 'idea' && p.kind !== 'issue' && !(p.kind === 'tracker' && !p.parent_id));
+          const minutesN = all.filter((p) => p.kind === 'minutes').length;
+          const pages = all.filter((p) => !['idea', 'issue', 'minutes'].includes(p.kind) && !(p.kind === 'tracker' && !p.parent_id));
           const ws = (await (await api('/api/workspaces')).json()).workspaces?.[0];
           let head = ws ? `Espacio: ${ws.icon || ''} ${ws.name} (este conector solo ve este espacio)\n` : '';
           head += ideas.length ? `Ideas en desarrollo (fuera del árbol): ${ideas.length} → list_ideas\n` : '';
           head += trackersN ? `Listas de seguimiento: ${trackersN} (marcadas en el árbol) con ${issues.length} ticket(s) → list_trackers / list_issues\n` : '';
+          head += minutesN ? `Actas de reunión: ${minutesN} → list_minutes\n` : '';
           head += '\n';
           if (!pages.length) return ok(head + 'No hay páginas todavía.');
           const children = new Map();
@@ -209,6 +212,11 @@ export function mountMcp(app, port) {
           if (p.kind === 'canvas') out += '(Esta página es un CANVAS: edítala con update_canvas, no con append/edit/update_page)\n\n';
           if (p.kind === 'idea') out += '(Esta página es una IDEA: trabájala con develop_idea y materialize_idea, no con append/edit/update_page)\n\n';
           if (p.kind === 'tracker') out += '(Esta página es una LISTA DE SEGUIMIENTO: crea tickets con create_issue, configúrala con update_tracker)\n\n';
+          let minutes = null;
+          if (p.kind === 'minutes') {
+            minutes = await (await api(`/api/pages/${page_id}/minutes`)).json();
+            out += `(Esta página es un ACTA DE REUNIÓN: su texto admite append/edit/update_page; propón lo que salga de ella con propose_from_minutes — la persona lo aprueba en la app)\n${minutesHeaderMarkdown(minutes)}\n\n`;
+          }
           let issue = null;
           if (p.kind === 'issue') {
             issue = await (await api(`/api/pages/${page_id}/issue`)).json();
@@ -220,6 +228,7 @@ export function mountMcp(app, port) {
           out += p.markdown || '(página vacía)';
           if (p.kind === 'canvas') out += `\n\n---\nJSON Canvas:\n\`\`\`json\n${JSON.stringify(p.canvas)}\n\`\`\``;
           if (issue) out += `\n\n## Relaciones\n\n${issueRelationsMarkdown(issue)}\n\n## Cronología\n\n${issueTimelineMarkdown(issue)}`;
+          if (minutes) out += `\n\n## Propuestas (bandeja de aprobación)\n\n${minutesItemsMarkdown(minutes)}`;
           if (p.files?.length) {
             out +=
               '\n\n---\nAdjuntos:\n' +
@@ -1087,6 +1096,88 @@ export function mountMcp(app, port) {
             lines.push(`- ${it.text}`);
           }
           return ok(lines.length ? lines.join('\n') : `Nada entre ${f} y ${t}.`);
+        } catch (e) {
+          return fail(e);
+        }
+      }
+    );
+
+    // ---------- Actas de reunión ----------
+    const proposalSchema = z.object({
+      type: z.enum(['task', 'list', 'doc', 'idea', 'event']).describe('task = tarea con seguimiento (ticket en una lista); list = lista de seguimiento nueva; doc = página de documentación; idea; event = evento de calendario (página con fecha)'),
+      title: z.string(),
+      details: z.string().optional().describe('Contexto en Markdown'),
+      payload: z
+        .object({
+          tracker_id: z.string().optional().describe('task: lista donde va el ticket (list_trackers); si falta, la persona la elige'),
+          assignee: z.string().optional().describe('task: responsable'),
+          date: z.string().optional().describe('task: fecha límite; event: fecha del evento (AAAA-MM-DD)'),
+          fields: z.record(z.string(), z.any()).optional().describe('task: otros campos de la lista por nombre'),
+          parent_id: z.string().optional().describe('doc/event/list: página bajo la que va (por defecto, el proyecto del acta)'),
+          template: z.enum(['issues', 'blockers', 'todo', 'topics', 'blank']).optional().describe('list: plantilla'),
+        })
+        .optional(),
+    });
+
+    server.registerTool(
+      'list_minutes',
+      {
+        title: 'Listar actas',
+        description: 'Lista las actas de reunión del espacio (fecha, proyecto, asistentes y cuántas propuestas quedan por aprobar).',
+        inputSchema: {},
+      },
+      async () => {
+        try {
+          const { minutes } = await (await api('/api/minutes')).json();
+          if (!minutes.length) return ok('No hay actas todavía.');
+          return ok(
+            minutes
+              .map((m) => `- ${m.date || '—'} · ${m.title} (id: ${m.id})${m.project ? ` · proyecto «${m.project.title}»` : ''}${m.attendees.length ? ` · ${m.attendees.join(', ')}` : ''}${m.pending ? ` · ⏳ ${m.pending} propuesta(s) por aprobar` : ''}`)
+              .join('\n')
+          );
+        } catch (e) {
+          return fail(e);
+        }
+      }
+    );
+
+    server.registerTool(
+      'create_minutes',
+      {
+        title: 'Crear acta de reunión',
+        description:
+          'Guarda un acta de reunión (sección Actas, sale en el calendario) con su texto en Markdown, fecha, proyecto y asistentes, y opcionalmente las propuestas que salen de ella (tareas, listas, documentación, ideas, eventos). Las propuestas NO se crean: quedan en la bandeja del acta hasta que la persona las aprueba. Úsala solo cuando el usuario pida guardar el acta.',
+        inputSchema: {
+          title: z.string(),
+          date: z.string().optional().describe('AAAA-MM-DD (por defecto hoy)'),
+          project_id: z.string().optional().describe('Página del proyecto al que pertenece'),
+          attendees: z.array(z.string()).optional(),
+          markdown: z.string().optional().describe('Texto del acta: Asistentes, Agenda, Notas, Acciones (- [ ] …), Decisiones, Ideas'),
+          proposals: z.array(proposalSchema).optional(),
+        },
+      },
+      async (args) => {
+        try {
+          const d = await (await api('/api/minutes', { method: 'POST', body: JSON.stringify(args) })).json();
+          return ok(`Acta guardada: «${d.title}» (id: ${d.page_id}, ${d.date}) con ${d.items.length} propuesta(s) pendientes de aprobar en la app.`);
+        } catch (e) {
+          return fail(e);
+        }
+      }
+    );
+
+    server.registerTool(
+      'propose_from_minutes',
+      {
+        title: 'Proponer desde un acta',
+        description:
+          'Añade a la bandeja de un acta propuestas de lo que hay que crear: tareas con seguimiento (en qué lista, responsable, fecha), listas nuevas, documentación, ideas y eventos de calendario. No crea nada: la persona revisa y aprueba en la app. Lee antes el acta con read_page (y list_trackers para elegir listas). No repitas propuestas que ya estén.',
+        inputSchema: { minutes_id: z.string(), proposals: z.array(proposalSchema).min(1).max(60) },
+      },
+      async ({ minutes_id, proposals }) => {
+        try {
+          const d = await (await api(`/api/pages/${minutes_id}/minutes/items`, { method: 'POST', body: JSON.stringify({ proposals }) })).json();
+          return ok(`${d.added} propuesta(s) añadidas a «${d.title}» (las repetidas se ignoran). La persona las aprueba en la app.`);
         } catch (e) {
           return fail(e);
         }

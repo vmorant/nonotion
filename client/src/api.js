@@ -176,6 +176,17 @@ export const api = {
   pageMarkdown: (id) => req(`/api/pages/${id}/markdown`),
   capture: (data) => req('/api/capture', { method: 'POST', body: JSON.stringify(data) }),
   graph: () => req('/api/graph'),
+  // Actas de reunión y su bandeja de propuestas
+  minutesList: () => req('/api/minutes'),
+  createMinutes: (data) => req('/api/minutes', { method: 'POST', body: JSON.stringify(data) }),
+  minutes: (id) => req(`/api/pages/${id}/minutes`),
+  updateMinutes: (id, data) => req(`/api/pages/${id}/minutes`, { method: 'PATCH', body: JSON.stringify(data) }),
+  detectMinutes: (id) => req(`/api/pages/${id}/minutes/detect`, { method: 'POST' }),
+  proposeMinutes: (id, proposals) => req(`/api/pages/${id}/minutes/items`, { method: 'POST', body: JSON.stringify({ proposals }) }),
+  editMinutesItem: (id, itemId, data) => req(`/api/pages/${id}/minutes/items/${itemId}`, { method: 'PATCH', body: JSON.stringify(data) }),
+  approveMinutesItem: (id, itemId, data = {}) => req(`/api/pages/${id}/minutes/items/${itemId}/approve`, { method: 'POST', body: JSON.stringify(data) }),
+  rejectMinutesItem: (id, itemId) => req(`/api/pages/${id}/minutes/items/${itemId}/reject`, { method: 'POST' }),
+  reopenMinutesItem: (id, itemId) => req(`/api/pages/${id}/minutes/items/${itemId}/reopen`, { method: 'POST' }),
   // Seguimiento: listas (trackers) y tickets
   trackers: () => req('/api/trackers'),
   createTracker: (data) => req('/api/trackers', { method: 'POST', body: JSON.stringify(data) }),

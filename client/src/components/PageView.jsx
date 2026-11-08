@@ -13,6 +13,7 @@ import IdeaView from './ideas/IdeaView.jsx';
 import { IssueFields, IssueActivity, IssueRefLink, useIssue } from './issues/IssuePanel.jsx';
 import NewIssueDialog from './issues/NewIssueDialog.jsx';
 import TrackerView from './issues/TrackerView.jsx';
+import { MinutesHeader, MinutesProposals, useMinutes } from './minutes/MinutesPanel.jsx';
 import { LINK_INVERSE } from './issues/model.js';
 
 const ICON = { size: 16, strokeWidth: 1.8 };
@@ -390,6 +391,7 @@ export default function PageView({
   };
 
   const issue = useIssue(id, page?.kind === 'issue', pageEvent);
+  const minutes = useMinutes(id, page?.kind === 'minutes', pageEvent);
 
   if (!page) return <div className="page-loading">Cargando…</div>;
 
@@ -398,7 +400,8 @@ export default function PageView({
   const isIdea = page.kind === 'idea';
   const isIssue = page.kind === 'issue';
   const isTracker = page.kind === 'tracker';
-  const isDoc = !isCanvas && !isIdea && !isIssue && !isTracker;
+  const isMinutes = page.kind === 'minutes';
+  const isDoc = !isCanvas && !isIdea && !isIssue && !isTracker && !isMinutes;
   const hasEditor = !isCanvas && !isIdea && !isTracker; // documentos y descripción de tickets
 
   // "Crear elemento" desde una página: la selección sirve de título
@@ -549,6 +552,12 @@ export default function PageView({
               <span className="crumb-sep">/</span>
             </span>
           )}
+          {isMinutes && (
+            <span>
+              <Link to="/minutes">📝 Actas</Link>
+              <span className="crumb-sep">/</span>
+            </span>
+          )}
           {(isIssue || isTracker) && (
             <span>
               <Link to="/issues">📋 Seguimiento</Link>
@@ -658,7 +667,7 @@ export default function PageView({
               <FilePlus2 {...ICON} />
             </button>
           )}
-          {!isIssue && !isTracker && (
+          {!isIssue && !isTracker && !isMinutes && (
             <button className="btn" onClick={() => onDuplicate(id)} title="Duplicar página">
               <Copy {...ICON} />
             </button>
@@ -713,6 +722,18 @@ export default function PageView({
           />
         )}
         {isIssue && issue.error && <div className="issue-error">⚠ {issue.error}</div>}
+        {isMinutes && minutes.detail && (
+          <MinutesHeader
+            detail={minutes.detail}
+            pages={pages}
+            onChange={async (patch) => {
+              const d = await api.updateMinutes(id, patch);
+              minutes.setDetail(d);
+              if (patch.date) setPage((p) => ({ ...p, page_date: patch.date }));
+              onTreeChange();
+            }}
+          />
+        )}
 
         {isTracker ? (
           <TrackerView key={id} pageId={id} pageEvent={pageEvent} members={members} pages={pages} onMove={onMove} onTreeChange={onTreeChange} />
@@ -765,6 +786,18 @@ export default function PageView({
             onChanged={async () => {
               await issue.load();
               onTreeChange();
+            }}
+          />
+        )}
+
+        {isMinutes && minutes.detail && (
+          <MinutesProposals
+            detail={minutes.detail}
+            pages={pages}
+            onChanged={async () => {
+              await minutes.load();
+              onTreeChange();
+              api.pageIssues(id).then(setPageIssues).catch(() => {});
             }}
           />
         )}

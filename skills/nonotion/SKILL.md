@@ -101,6 +101,15 @@ Antes de crear, busca por si ya existe una página del tema y ofrécela.
     otra página o la saca (`new_parent_id: null`). Una lista entera también se
     relaciona (`link_issue` con `tracker`) con páginas, canvas, ideas,
     eventos u otras listas.
+- **Actas de reunión** (sección Actas): para guardar una reunión usa
+  `create_minutes` (fecha, `project_id` de la página del proyecto,
+  asistentes y el acta en Markdown: Asistentes, Agenda, Notas, Acciones con
+  `- [ ] tarea @persona AAAA-MM-DD`, Decisiones, Ideas). Lo que salga de la
+  reunión (tareas con seguimiento, listas, documentación, ideas, eventos) va
+  como **propuestas** (`proposals` o `propose_from_minutes`, con `tracker_id`
+  de `list_trackers`, responsable y fecha): **no lo crees directamente** con
+  create_issue/create_page; la persona lo aprueba en la app. `read_page` del
+  acta dice qué está pendiente, creado o descartado.
 - **Calendario y agenda**: `agenda` responde "¿qué vence esta semana?", "¿qué
   hay el jueves?", "¿qué está vencido?". Las fechas de los tickets tienen tipo
   (fecha límite, inicio, evento u otra) según el campo; un evento o reunión es

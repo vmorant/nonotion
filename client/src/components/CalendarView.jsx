@@ -30,7 +30,8 @@ const MONTHS = ['enero', 'febrero', 'marzo', 'abril', 'mayo', 'junio', 'julio', 
 
 // Tipos de fecha que se pueden mostrar u ocultar
 export const KINDS = [
-  { id: 'events', label: 'Eventos y reuniones', icon: '📅', hint: 'Páginas con fecha asignada' },
+  { id: 'minutes', label: 'Actas', icon: '📝', hint: 'Actas de reunión' },
+  { id: 'events', label: 'Eventos', icon: '📅', hint: 'Páginas con fecha asignada' },
   { id: 'deadline', label: 'Fechas límite', icon: '⏰', hint: 'Campos de fecha límite de las listas' },
   { id: 'start', label: 'Inicios', icon: '▶', hint: 'Campos de inicio de las listas' },
   { id: 'event', label: 'Eventos de listas', icon: '📌', hint: 'Campos de tipo evento de las listas' },
@@ -38,11 +39,13 @@ export const KINDS = [
   { id: 'created', label: 'Creadas', icon: '✚', hint: 'Páginas creadas ese día' },
   { id: 'edited', label: 'Modificadas', icon: '✎', hint: 'Páginas editadas ese día' },
 ];
-const DEFAULT_PREFS = { kinds: ['events', 'deadline', 'start', 'event', 'other'], trackers: [], hideDone: true, mode: 'month' };
+const DEFAULT_PREFS = { kinds: ['minutes', 'events', 'deadline', 'start', 'event', 'other'], trackers: [], hideDone: true, mode: 'month' };
 const PREF_KEY = 'nn:calendar';
 const readPrefs = () => {
   try {
-    return { ...DEFAULT_PREFS, ...(JSON.parse(localStorage.getItem(PREF_KEY)) || {}) };
+    const saved = JSON.parse(localStorage.getItem(PREF_KEY)) || {};
+    if (saved.kinds && !saved.v2) saved.kinds = [...new Set(['minutes', ...saved.kinds])];
+    return { ...DEFAULT_PREFS, ...saved, v2: true };
   } catch {
     return DEFAULT_PREFS;
   }
@@ -64,7 +67,9 @@ const dayLabel = (key) => {
 function toItems(data) {
   if (!data) return [];
   const out = [];
-  for (const p of data.dated) out.push({ kind: 'events', id: p.id, day: p.day, icon: p.icon || '📅', title: p.title || 'Sin título' });
+  for (const p of data.dated) {
+    out.push({ kind: p.kind === 'minutes' ? 'minutes' : 'events', id: p.id, day: p.day, icon: p.icon || (p.kind === 'minutes' ? '📝' : '📅'), title: p.title || 'Sin título' });
+  }
   for (const i of data.issues) {
     out.push({
       kind: i.role,

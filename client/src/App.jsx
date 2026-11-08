@@ -24,6 +24,7 @@ import { PanelLeftOpen } from 'lucide-react';
 import GraphPage from './components/graph/GraphPage.jsx';
 import IdeasView from './components/ideas/IdeasView.jsx';
 import IssuesView from './components/issues/IssuesView.jsx';
+import MinutesView from './components/minutes/MinutesView.jsx';
 
 export default function App() {
   const [pages, setPages] = useState([]);
@@ -290,6 +291,7 @@ export default function App() {
           <Route path="/graph" element={<GraphPage pages={pages} />} />
           <Route path="/ideas" element={<IdeasView pages={pages} onChanged={refreshTree} />} />
           <Route path="/issues" element={<IssuesView pages={pages} onChanged={refreshTree} />} />
+          <Route path="/minutes" element={<MinutesView pages={pages} onChanged={refreshTree} />} />
           <Route
             path="*"
             element={

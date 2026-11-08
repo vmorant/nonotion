@@ -20,6 +20,7 @@ import {
   Waypoints,
   Lightbulb,
   ListChecks,
+  NotebookPen,
 } from 'lucide-react';
 
 function TreeItem({ page, index, childrenMap, depth, onCreate, onDelete, onDuplicate, onMove, onFavorite, onMoveTo }) {
@@ -351,13 +352,14 @@ export default function Sidebar({
 
   // Las ideas viven en su propia vista, no en el árbol
   const ideasCount = pages.filter((p) => p.kind === 'idea').length;
+  const minutesCount = pages.filter((p) => p.kind === 'minutes').length;
   const activeIssues = pages.filter((p) => p.kind === 'issue' && ['todo', 'doing', 'blocked'].includes(p.issue_status));
   const blockedIssues = activeIssues.filter((p) => p.issue_status === 'blocked').length;
   // Todas las listas de seguimiento (las de una página y las independientes)
   const trackers = pages.filter((p) => p.kind === 'tracker').sort((a, b) => (a.title || '').localeCompare(b.title || '', 'es'));
   const childrenMap = new Map();
   for (const p of pages) {
-    if (p.kind === 'idea' || p.kind === 'issue') continue; // viven en sus propias vistas (los tickets, dentro de su lista)
+    if (p.kind === 'idea' || p.kind === 'issue' || p.kind === 'minutes') continue; // viven en sus propias vistas (los tickets, dentro de su lista)
     if (p.kind === 'tracker' && !p.parent_id) continue; // lista sin página: solo en Listas y Seguimiento
     const key = p.parent_id || null;
     if (!childrenMap.has(key)) childrenMap.set(key, []);
@@ -434,6 +436,10 @@ export default function Sidebar({
       <div className="sidebar-tools">
         <NavLink to="/calendar" className={({ isActive }) => 'sidebar-tool-link' + (isActive ? ' active' : '')}>
           <CalendarDays size={16} strokeWidth={1.8} /> Calendario
+        </NavLink>
+        <NavLink to="/minutes" className={({ isActive }) => 'sidebar-tool-link' + (isActive ? ' active' : '')}>
+          <NotebookPen size={16} strokeWidth={1.8} /> Actas
+          {minutesCount > 0 && <span className="sidebar-count">{minutesCount}</span>}
         </NavLink>
         <NavLink to="/issues" className={({ isActive }) => 'sidebar-tool-link' + (isActive ? ' active' : '')}>
           <ListChecks size={16} strokeWidth={1.8} /> Seguimiento
