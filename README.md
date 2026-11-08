@@ -403,3 +403,7 @@ Cómo funciona:
 - Los scripts (`nonotion-send`) usan un token de API: el de un conector del espacio (Ajustes del espacio) o el histórico `cat /var/lib/nonotion/mcp_token` (espacio inicial).
 
 Con el login de GitHub activo puedes **quitar Cloudflare Access** del dominio principal (y las reglas Bypass de `/share/*`, `/files/*`, `/assets/*` y `/mcp/*`): la app ya protege cada ruta. O mantener ambos como doble capa.
+
+## Créditos
+
+Los emojis se muestran con [Twemoji](https://github.com/jdecked/twemoji) (gráficos © Twitter y colaboradores, [CC-BY 4.0](https://creativecommons.org/licenses/by/4.0/)) a través de la fuente [twemoji-colr-font](https://github.com/mrdrogdrog/twemoji-color-font) (OFL-1.1). Nombres y palabras clave en español del selector: [emojibase](https://emojibase.dev) (MIT). Para regenerar los datos del selector: `cd client && npm run emoji-data`.

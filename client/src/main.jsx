@@ -3,6 +3,7 @@ import ReactDOM from 'react-dom/client';
 import { BrowserRouter, Routes, Route } from 'react-router-dom';
 import App from './App.jsx';
 import SharePage from './components/SharePage.jsx';
+import './emoji-font.css';
 import './styles.css';
 
 ReactDOM.createRoot(document.getElementById('root')).render(
