@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import { EmojiButton } from './EmojiPicker.jsx';
 
 // Diálogo propio para crear un espacio: window.prompt no funciona en apps
 // instaladas (PWA) ni en algunos navegadores móviles, y el clic se perdía sin aviso.
@@ -40,13 +41,7 @@ export default function NewWorkspaceDialog({ onCreate, onClose }) {
           Un espacio por proyecto o cliente: tendrá sus propias páginas, archivos, etiquetas, miembros y conector de Claude.
         </p>
         <div className="ws-new-row">
-          <input
-            className="ws-new-icon"
-            value={icon}
-            maxLength={8}
-            title="Emoji del espacio"
-            onChange={(e) => setIcon(e.target.value)}
-          />
+          <EmojiButton className="ws-new-icon" value={icon} onChange={setIcon} title="Emoji del espacio" />
           <input
             ref={inputRef}
             value={name}

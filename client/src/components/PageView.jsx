@@ -685,7 +685,7 @@ export default function PageView({
         }
       >
         <div className="page-head">
-          <button className="page-icon" onClick={() => setEmojiOpen((v) => !v)} title="Cambiar icono">
+          <button className="page-icon" data-emoji-anchor onClick={() => setEmojiOpen((v) => !v)} title="Cambiar icono">
             {page.icon || '📄'}
           </button>
           {emojiOpen && (

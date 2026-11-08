@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
+import { EmojiButton } from './EmojiPicker.jsx';
 import { api } from '../api.js';
 
 // Ajustes de un espacio: nombre e icono, miembros (cuentas de GitHub con su
@@ -93,7 +94,7 @@ export default function WorkspaceSettings({ workspace, owner, me, onChanged, onD
               });
             }}
           >
-            <input className="ws-icon-input" value={icon} onChange={(e) => setIcon(e.target.value)} disabled={!isAdmin} maxLength={8} />
+            <EmojiButton className="ws-icon-input" value={icon} onChange={setIcon} disabled={!isAdmin} title="Emoji del espacio" />
             <input className="ws-input" value={name} onChange={(e) => setName(e.target.value)} disabled={!isAdmin} maxLength={60} />
             {isAdmin && <button className="btn primary">Guardar</button>}
           </form>
