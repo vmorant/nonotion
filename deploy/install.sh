@@ -18,9 +18,10 @@ apt-get install -y poppler-utils
 # tesseract: OCR de las capturas que se guardan como semilla de una idea (para poder buscarlas)
 apt-get install -y tesseract-ocr tesseract-ocr-spa tesseract-ocr-eng || echo '    (tesseract no disponible: las capturas no serán buscables por su texto)'
 
-if ! command -v node >/dev/null || [ "$(node -v | cut -d. -f1 | tr -d v)" -lt 20 ]; then
-  echo "==> Instalando Node.js 20 (NodeSource)"
-  curl -fsSL https://deb.nodesource.com/setup_20.x | bash -
+# Node 22 LTS (Node 20 dejó de recibir parches de seguridad en abril de 2026)
+if ! command -v node >/dev/null || [ "$(node -v | cut -d. -f1 | tr -d v)" -lt 22 ]; then
+  echo "==> Instalando Node.js 22 LTS (NodeSource)"
+  curl -fsSL https://deb.nodesource.com/setup_22.x | bash -
   apt-get install -y nodejs
 fi
 
@@ -36,6 +37,11 @@ rsync -a --delete \
 echo "==> Instalando dependencias y compilando el frontend"
 cd "$APP_DIR"
 npm install --omit=dev
+# Con otra versión de Node, el módulo nativo de SQLite se recompila
+if [ "$(cat .node-version 2>/dev/null)" != "$(node -v)" ]; then
+  npm rebuild better-sqlite3
+  node -v > .node-version
+fi
 npm run build
 
 echo "==> Preparando directorio de datos en $DATA_DIR"
@@ -56,11 +62,14 @@ if [ -f "$DATA_DIR/nonotion.db" ]; then
   ls -1t "$DATA_DIR/backups/pre-update/"nonotion-*.db 2>/dev/null | tail -n +11 | xargs -r rm -f
 fi
 chown -R nonotion:nonotion "$DATA_DIR" "$APP_DIR"
+# Datos (base de datos, adjuntos, copias) solo legibles por el servicio
+chmod 700 "$DATA_DIR"
+chmod -R go-rwx "$DATA_DIR"
 
 echo "==> Configuración en /etc/nonotion.env"
 if [ ! -f /etc/nonotion.env ]; then
   cp "$APP_DIR/deploy/nonotion.env.example" /etc/nonotion.env
-  echo "    creada desde la plantilla (login con GitHub desactivado hasta rellenarla)"
+  echo "    creada desde la plantilla: rellena el login con GitHub (hasta entonces no deja entrar a nadie)"
 fi
 chown root:root /etc/nonotion.env
 chmod 600 /etc/nonotion.env

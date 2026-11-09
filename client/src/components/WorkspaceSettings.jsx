@@ -5,7 +5,8 @@ import { api } from '../api.js';
 // Ajustes de un espacio: nombre e icono, miembros (cuentas de GitHub con su
 // rol) y conectores de Claude (un token por persona y espacio).
 
-const ROLE_LABEL = { admin: 'Administrador', editor: 'Editor' };
+const ROLE_LABEL = { admin: 'Administrador', editor: 'Editor', viewer: 'Solo lectura' };
+const ROLE_OPTIONS = ['viewer', 'editor', 'admin'];
 
 function Section({ title, children, hint }) {
   return (
@@ -102,7 +103,7 @@ export default function WorkspaceSettings({ workspace, owner, me, onChanged, onD
 
         <Section
           title="Miembros"
-          hint={`Cada persona entra con "Entrar con GitHub" en ${location.origin} y solo ve los espacios donde está. Los editores leen y escriben; los administradores además gestionan miembros.`}
+          hint={`Cada persona entra con "Entrar con GitHub" en ${location.origin} y solo ve los espacios donde está. Solo lectura: puede ver pero no cambiar nada. Editor: lee y escribe. Administrador: además gestiona miembros, comparte páginas en público y vacía la papelera.`}
         >
           {members.owners.length > 0 && (
             <div className="ws-owners">
@@ -120,8 +121,11 @@ export default function WorkspaceSettings({ workspace, owner, me, onChanged, onD
                       value={m.role}
                       onChange={(e) => run(async () => (await api.setMember(workspace.id, m.github_login, e.target.value), load()))}
                     >
-                      <option value="editor">{ROLE_LABEL.editor}</option>
-                      <option value="admin">{ROLE_LABEL.admin}</option>
+                      {ROLE_OPTIONS.map((r) => (
+                        <option key={r} value={r}>
+                          {ROLE_LABEL[r]}
+                        </option>
+                      ))}
                     </select>
                     <button
                       className="icon-btn"
@@ -141,7 +145,10 @@ export default function WorkspaceSettings({ workspace, owner, me, onChanged, onD
             ))}
             {!members.members.length && <li className="ws-hint">Nadie más todavía.</li>}
           </ul>
-          {isAdmin && (
+          {isAdmin && !owner && (
+            <p className="ws-hint">Solo los propietarios de la instancia pueden dar acceso a personas nuevas.</p>
+          )}
+          {isAdmin && owner && (
             <form
               className="ws-row"
               onSubmit={(e) => {
@@ -162,8 +169,11 @@ export default function WorkspaceSettings({ workspace, owner, me, onChanged, onD
                 onChange={(e) => setNewLogin(e.target.value)}
               />
               <select value={newRole} onChange={(e) => setNewRole(e.target.value)}>
-                <option value="editor">{ROLE_LABEL.editor}</option>
-                <option value="admin">{ROLE_LABEL.admin}</option>
+                {ROLE_OPTIONS.map((r) => (
+                  <option key={r} value={r}>
+                    {ROLE_LABEL[r]}
+                  </option>
+                ))}
               </select>
               <button className="btn primary">Añadir</button>
             </form>
@@ -172,11 +182,22 @@ export default function WorkspaceSettings({ workspace, owner, me, onChanged, onD
 
         <Section
           title="Conector de Claude"
-          hint='Cada conector da acceso solo a este espacio. En claude.ai: Ajustes → Conectores → "Add custom connector" y pega la URL. Trátala como una contraseña.'
+          hint='Cada conector da acceso solo a este espacio. En claude.ai: Ajustes → Conectores → "Add custom connector" y pega la URL. Trátala como una contraseña: se muestra una sola vez al crearla (si la pierdes, crea otra y revoca la antigua).'
         >
+          {fresh && (
+            <div className="ws-token-fresh">
+              <strong>Copia ahora la URL del conector nuevo:</strong> por seguridad solo se guarda una huella irreversible y no se podrá volver a ver.
+              <div className="ws-row">
+                <code className="ws-token-url">{connectorUrl(fresh)}</code>
+                <button className="btn primary" onClick={() => copy(connectorUrl(fresh), 'fresh')}>
+                  {copied === 'fresh' ? '✓ Copiada' : 'Copiar URL'}
+                </button>
+              </div>
+            </div>
+          )}
           <ul className="ws-tokens">
             {tokens.map((t) => (
-              <li key={t.id + t.owner} className={fresh && t.token === fresh ? 'fresh' : ''}>
+              <li key={t.id + t.owner}>
                 <div className="ws-token-main">
                   <span className="ws-token-label">
                     {t.label || 'Conector'} {!t.mine && <span className="ws-hint">· de @{t.owner}</span>}
@@ -190,11 +211,6 @@ export default function WorkspaceSettings({ workspace, owner, me, onChanged, onD
                     Creado {t.created_at?.slice(0, 10)} · {t.last_used_at ? `usado ${t.last_used_at.slice(0, 16)}` : 'sin usar'}
                   </span>
                 </div>
-                {t.token && (
-                  <button className="btn" onClick={() => copy(connectorUrl(t.token), t.id)}>
-                    {copied === t.id ? '✓ Copiada' : 'Copiar URL'}
-                  </button>
-                )}
                 <button
                   className="btn danger"
                   title="Revocar: deja de funcionar al momento"

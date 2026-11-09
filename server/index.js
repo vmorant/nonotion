@@ -2,6 +2,7 @@ import express from 'express';
 import path from 'path';
 import fs from 'fs';
 import os from 'os';
+import crypto from 'crypto';
 import multer from 'multer';
 import { nanoid } from 'nanoid';
 import { fileURLToPath } from 'url';
@@ -10,7 +11,7 @@ import { Worker } from 'worker_threads';
 import db, { DATA_DIR, FILES_DIR, ftsUpsert, ftsDelete, extractText, logActivity } from './db.js';
 import { docToMarkdown, markdownToDoc, appendMarkdown, replaceInDoc, EditError } from './markdown.js';
 import { mountMcp, getOrCreateToken } from './mcp.js';
-import { setupAuth, purgeExpiredSessions } from './auth.js';
+import { setupAuth, purgeExpiredSessions, clientIp, rateLimited } from './auth.js';
 import { mountTags, tagsOf, setPageTags, copyTags, pagesWithTags, TAGS_COLUMN, splitTags, lowercaseTags } from './tags.js';
 import { workspaceGuard, mountWorkspaces, pageInWs, liveParentInWs, adoptLegacyToken, loginOf, lookupToken, roleIn } from './workspaces.js';
 import { movePages, MoveError, describeMove } from './pageMove.js';
@@ -75,26 +76,56 @@ lowercaseTags();
 // Login con GitHub + tokens de API. Va antes que cualquier ruta.
 adoptLegacyToken(getOrCreateToken());
 const authCfg = setupAuth(app);
-// El cuerpo JSON se lee solo DESPUÉS de autenticar: antes, cualquiera sin
-// sesión podía mandar cuerpos de 100 MB y hacer que el servidor los procesara.
+// El cuerpo JSON se lee solo DESPUÉS de autenticar, y nunca en peticiones sin
+// sesión ni token (las rutas públicas como /share/ no lo necesitan): antes,
+// cualquiera desde internet podía mandar cuerpos comprimidos que se inflaban a
+// 100 MB en memoria y tumbar el servidor.
 // El MCP es público por ruta pero exige un token válido en la URL.
-app.use('/mcp/:token', (req, res, next) =>
-  lookupToken(req.params.token)
-    ? next()
-    : res.status(401).json({ jsonrpc: '2.0', error: { code: -32001, message: 'Token MCP inválido' }, id: null })
-);
-app.use(express.json({ limit: '100mb' }));
+app.use('/mcp/:token', (req, res, next) => {
+  if (lookupToken(req.params.token)) return next();
+  if (rateLimited(`badtoken:${clientIp(req)}`, 30, 10 * 60_000)) {
+    return res.status(429).json({ jsonrpc: '2.0', error: { code: -32029, message: 'Demasiados intentos' }, id: null });
+  }
+  res.status(401).json({ jsonrpc: '2.0', error: { code: -32001, message: 'Token MCP inválido' }, id: null });
+});
+// La página más grande ronda unos cientos de KB: 20 MB deja mucho margen (30 MB
+// en el MCP, que puede traer un adjunto en base64)
+// Claves __proto__ fuera de todo JSON que entra: un contenido con atributos
+// "__proto__" podía convertirse en atributos HTML ejecutables al pintarlo
+// (GHSA-cp6q-959q-f8rh, Tiptap 2)
+const dropProtoKeys = (key, value) => (key === '__proto__' ? undefined : value);
+const jsonBody = express.json({ limit: '20mb', reviver: dropProtoKeys });
+const mcpJsonBody = express.json({ limit: '30mb', reviver: dropProtoKeys });
+app.use((req, res, next) => {
+  if (req.path.startsWith('/mcp/')) return mcpJsonBody(req, res, next);
+  if (!req.user && authCfg.mode !== 'off') return next();
+  jsonBody(req, res, next);
+});
 // Espacios: cada petición queda limitada a los espacios de su usuario/token
 app.use(workspaceGuard);
 
 app.get('/api/health', (req, res) => res.json({ ok: true }));
 
+// Subida directa (scripts): la app usa la subida por trozos, sin límite práctico
 const upload = multer({
   storage: multer.diskStorage({
     destination: FILES_DIR,
     filename: (req, file, cb) => cb(null, nanoid(21)),
   }),
+  limits: { fileSize: 2 * 1024 ** 3, files: 1, fields: 20 },
 });
+
+// Espacio libre en el disco de datos: una subida no puede llenarlo (se dejan
+// 1 GB libres para la base de datos, sus copias y las vistas previas)
+const DISK_RESERVE = 1024 ** 3;
+function diskFree() {
+  try {
+    const st = fs.statfsSync(FILES_DIR);
+    return st.bavail * st.bsize;
+  } catch {
+    return Infinity;
+  }
+}
 
 // ---------- Sincronización en vivo (Server-Sent Events) ----------
 // Cada navegador abre /api/events; cuando algo cambia, le avisamos para que se
@@ -672,7 +703,16 @@ app.post('/api/trash/:id/restore', (req, res) => {
   res.json({ ok: true, restored: subtree.length });
 });
 
+// Borrar para siempre y publicar en internet: solo administradores del espacio
+// (ni editores ni tokens de API/MCP)
+function requireAdmin(req, res) {
+  if (roleIn(req, req.ws) === 'admin') return true;
+  res.status(403).json({ error: 'Solo los administradores del espacio pueden hacer esto' });
+  return false;
+}
+
 app.delete('/api/trash/:id', (req, res) => {
+  if (!requireAdmin(req, res)) return;
   const page = db.prepare('SELECT id FROM pages WHERE id = ? AND trashed_at IS NOT NULL').get(req.params.id);
   if (!page) return res.status(404).json({ error: 'No está en la papelera' });
   const deleted = permanentDelete(page.id);
@@ -681,6 +721,7 @@ app.delete('/api/trash/:id', (req, res) => {
 });
 
 app.delete('/api/trash', (req, res) => {
+  if (!requireAdmin(req, res)) return;
   const roots = db
     .prepare(
       `SELECT t.id FROM pages t
@@ -1024,6 +1065,9 @@ const EXT_MIME = {
 };
 
 function inferMime(name, given) {
+  // Solo un tipo MIME limpio («tipo/subtipo»): nada de listas ni parámetros raros
+  given = typeof given === 'string' ? given.trim().toLowerCase().split(';')[0].trim() : '';
+  if (!/^[a-z]+\/[a-z0-9][a-z0-9.+-]*$/.test(given)) given = '';
   if (given && given !== 'application/octet-stream') return given;
   return EXT_MIME[path.extname(name || '').toLowerCase()] || given || 'application/octet-stream';
 }
@@ -1097,6 +1141,9 @@ app.post('/api/uploads', (req, res) => {
   const { name, size, mime, page_id } = req.body || {};
   if (typeof name !== 'string' || !name.trim()) return res.status(400).json({ error: 'Falta el nombre' });
   if (!Number.isSafeInteger(size) || size < 0) return res.status(400).json({ error: 'Tamaño inválido' });
+  if (size + DISK_RESERVE > diskFree()) {
+    return res.status(507).json({ error: 'No queda espacio en el disco del servidor para este archivo' });
+  }
   if (page_id && !pageInWs(page_id, req.ws)) {
     return res.status(400).json({ error: 'Página inexistente' });
   }
@@ -1391,6 +1438,16 @@ function renderPdfPage(pdfPath, page, fileId) {
   });
 }
 
+// ¿Podemos ejecutar programas sin red? (unshare -rn: espacio de usuario y de red propios)
+const NO_NET_CMD = (() => {
+  try {
+    const r = spawnSync('unshare', ['-rn', 'true'], { timeout: 5000 });
+    if (r.status === 0) return ['unshare', '-rn'];
+  } catch {}
+  console.warn('Aviso: «unshare -rn» no funciona aquí; las vistas previas de documentos de oficina quedan desactivadas');
+  return null;
+})();
+
 function convertToPdf(f) {
   return new Promise((resolve, reject) => {
     // Los archivos se guardan sin extensión: copia temporal con la extensión
@@ -1406,13 +1463,22 @@ function convertToPdf(f) {
       cleanup();
       return reject(new Error('Archivo no encontrado en disco'));
     }
+    // Sin red: un documento puede enlazar imágenes remotas que LibreOffice
+    // descargaría al convertir, y así hacer que el servidor pida cosas a otras
+    // máquinas de la red local (SSRF). unshare -rn lo ejecuta en un espacio de
+    // red vacío (solo un loopback propio).
+    const sofficeArgs = [
+      '--headless', '--norestore',
+      `-env:UserInstallation=file://${tmp}/profile`,
+      '--convert-to', 'pdf', '--outdir', tmp, src,
+    ];
+    if (!NO_NET_CMD) {
+      cleanup();
+      return reject(new Error('Vista previa desactivada: no se puede aislar LibreOffice de la red (falta unshare)'));
+    }
     execFile(
-      'soffice',
-      [
-        '--headless', '--norestore',
-        `-env:UserInstallation=file://${tmp}/profile`,
-        '--convert-to', 'pdf', '--outdir', tmp, src,
-      ],
+      NO_NET_CMD[0],
+      [...NO_NET_CMD.slice(1), 'soffice', ...sofficeArgs],
       { timeout: 120000 },
       (err) => {
         const out = path.join(tmp, 'doc.pdf');
@@ -1448,14 +1514,38 @@ function readSheets(f) {
     } catch {}
   }
   if (sheetsInFlight.has(f.id)) return sheetsInFlight.get(f.id);
-  const job = new Promise((resolve, reject) => {
+  // Como mucho dos hojas leyéndose a la vez (cada una puede ocupar cientos de MB)
+  const job = sheetSlot().then((release) => readSheetsNow(f, cache).finally(release));
+  sheetsInFlight.set(f.id, job);
+  job.finally(() => sheetsInFlight.delete(f.id)).catch(() => {});
+  return job;
+}
+
+let sheetsRunning = 0;
+const sheetsQueue = [];
+function sheetSlot() {
+  return new Promise((resolve) => {
+    const take = () => {
+      sheetsRunning++;
+      resolve(() => {
+        sheetsRunning--;
+        sheetsQueue.shift()?.();
+      });
+    };
+    if (sheetsRunning < 2) take();
+    else sheetsQueue.push(take);
+  });
+}
+
+function readSheetsNow(f, cache) {
+  return new Promise((resolve, reject) => {
     const worker = new Worker(new URL('./sheets-worker.js', import.meta.url), {
       workerData: {
         filePath: path.join(FILES_DIR, f.id),
         ext: path.extname(f.name).toLowerCase(),
         textLimit: TEXT_EXTRACT_LIMIT,
       },
-      resourceLimits: { maxOldGenerationSizeMb: 1536 },
+      resourceLimits: { maxOldGenerationSizeMb: 512 },
     });
     const timer = setTimeout(() => {
       worker.terminate();
@@ -1475,9 +1565,7 @@ function readSheets(f) {
       clearTimeout(timer);
       reject(e);
     });
-  }).finally(() => sheetsInFlight.delete(f.id));
-  sheetsInFlight.set(f.id, job);
-  return job;
+  });
 }
 
 app.get('/files/:id/sheets', async (req, res) => {
@@ -1579,8 +1667,11 @@ app.get('/files/:id/page/:page', async (req, res) => {
 // origen opaco, así que sus scripts funcionan (gráficos, CDN) pero no pueden
 // leer la sesión ni llamar a la API de NoNotion. Vale igual dentro del visor
 // (iframe) que abierto en una pestaña nueva.
+// Sin allow-forms, allow-downloads ni allow-popups-to-escape-sandbox: un HTML
+// subido no puede hacerse pasar por un formulario de login de nuestro dominio,
+// ni lanzar descargas, ni abrir ventanas fuera del aislamiento.
 const HTML_VIEW_CSP =
-  "sandbox allow-scripts allow-popups allow-popups-to-escape-sandbox allow-forms allow-modals allow-downloads; default-src * data: blob: 'unsafe-inline' 'unsafe-eval'";
+  "sandbox allow-scripts allow-popups allow-modals; default-src * data: blob: 'unsafe-inline' 'unsafe-eval'; form-action 'none'";
 const isHtmlFile = (f) => /^(text\/html|application\/xhtml\+xml)\b/i.test(f.mime || '') || /\.x?html?$/i.test(f.name || '');
 app.get('/files/:id/view', (req, res, next) => {
   const f = db.prepare('SELECT * FROM files WHERE id = ? AND deleted_at IS NULL').get(req.params.id);
@@ -1689,6 +1780,7 @@ app.get('/api/search', (req, res) => {
 // ---------- Compartir (enlaces públicos) ----------
 
 app.post('/api/pages/:id/share', (req, res) => {
+  if (!requireAdmin(req, res)) return;
   const page = db.prepare('SELECT * FROM pages WHERE id = ?').get(req.params.id);
   if (!page) return res.status(404).json({ error: 'Página no encontrada' });
   const token = page.share_token || nanoid(24);
@@ -1737,7 +1829,10 @@ app.get('/api/share/:token', (req, res) => {
 // ---------- Export ZIP completo (Markdown + archivos) ----------
 
 function sanitizeName(name) {
-  const clean = (name || 'Sin título').replace(/[\/\\:*?"<>|\x00-\x1f]/g, ' ').replace(/\s+/g, ' ').trim();
+  let clean = (name || 'Sin título').replace(/[\/\\:*?"<>|\x00-\x1f]/g, ' ').replace(/\s+/g, ' ').trim();
+  // «.», «..» o nombres que acaban en punto: dentro de un ZIP son rutas
+  // relativas (a/../../x) que algunos descompresores siguen fuera de la carpeta
+  clean = clean.replace(/^\.+/, (d) => '_'.repeat(d.length)).replace(/\.+$/, '').trim();
   return (clean || 'Sin título').slice(0, 120);
 }
 
@@ -1940,9 +2035,33 @@ mountMcp(app, PORT);
 
 const dist = path.join(__dirname, '..', 'client', 'dist');
 if (fs.existsSync(dist)) {
-  app.use(express.static(dist));
+  // CSP de la app: solo se ejecutan nuestros propios scripts (y el pequeño
+  // script del tema de index.html, por su hash). Si algún día se colara HTML en
+  // una página, no podría ejecutar código ni mandar datos fuera.
+  const indexHtml = fs.readFileSync(path.join(dist, 'index.html'), 'utf8');
+  const inlineHashes = [...indexHtml.matchAll(/<script(?![^>]*\bsrc=)[^>]*>([\s\S]*?)<\/script>/g)].map(
+    (m) => `'sha256-${crypto.createHash('sha256').update(m[1]).digest('base64')}'`
+  );
+  const APP_CSP = [
+    "default-src 'self'",
+    `script-src 'self' ${inlineHashes.join(' ')}`,
+    "style-src 'self' 'unsafe-inline'",
+    "img-src 'self' data: blob: https: http:",
+    "media-src 'self' data: blob: https:",
+    "font-src 'self' data:",
+    "connect-src 'self'",
+    "frame-src 'self' https: http:",
+    "worker-src 'self' blob:",
+    "object-src 'self'",
+    "base-uri 'none'",
+    "form-action 'self'",
+    "frame-ancestors 'self'",
+  ].join('; ');
+  const setAppCsp = (res) => res.setHeader('Content-Security-Policy', APP_CSP);
+  app.use(express.static(dist, { setHeaders: (res, file) => file.endsWith('.html') && setAppCsp(res) }));
   app.get(/^(?!\/api\/|\/files\/).*/, (req, res) => {
-    res.sendFile(path.join(dist, 'index.html'));
+    setAppCsp(res);
+    res.type('html').send(indexHtml);
   });
 }
 
@@ -2013,6 +2132,10 @@ setInterval(purgeExpiredSessions, 6 * 60 * 60 * 1000).unref();
 setTimeout(backupDatabase, 60 * 1000).unref();
 setInterval(backupDatabase, 60 * 60 * 1000).unref();
 
-app.listen(PORT, () => {
-  console.log(`NoNotion escuchando en http://localhost:${PORT}`);
+// HOST permite escuchar solo en una interfaz (p. ej. 127.0.0.1 si cloudflared
+// corre en la misma máquina). Por defecto, todas: cloudflared suele estar en
+// otro contenedor; entonces limita el puerto con el cortafuegos.
+const HOST = process.env.HOST || undefined;
+app.listen(PORT, HOST, () => {
+  console.log(`NoNotion escuchando en http://${HOST || 'localhost'}:${PORT}`);
 });

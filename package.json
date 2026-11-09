@@ -11,7 +11,7 @@
   },
   "dependencies": {
     "@e965/xlsx": "0.20.3",
-    "@modelcontextprotocol/sdk": "^1.29.0",
+    "@modelcontextprotocol/sdk": "^1.32.2",
     "@tiptap/core": "^2.11.5",
     "@tiptap/extension-code-block-lowlight": "^2.11.5",
     "@tiptap/extension-image": "^2.11.5",
@@ -30,8 +30,11 @@
     "jsdom": "^25.0.1",
     "lowlight": "^3.3.0",
     "multer": "^1.4.5-lts.1",
-    "nanoid": "^5.0.9",
+    "nanoid": "^5.1.16",
     "tiptap-markdown": "^0.8.10",
-    "zod": "^4.4.3"
+    "zod": "^4.6.7"
+  },
+  "overrides": {
+    "qs": "6.17.1"
   }
 }

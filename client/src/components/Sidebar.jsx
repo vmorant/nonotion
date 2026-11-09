@@ -485,6 +485,19 @@ export default function Sidebar({
             >
               Salir
             </button>
+            <button
+              className="icon-btn"
+              title="Cerrar la sesión en todos tus dispositivos (por si has perdido uno)"
+              onClick={async () => {
+                if (!confirm('¿Cerrar la sesión en todos tus dispositivos?')) return;
+                try {
+                  await api.logout({ all: true });
+                } catch {}
+                window.location.href = '/login';
+              }}
+            >
+              Salir de todo
+            </button>
           </div>
         ) : me?.email ? (
           <span title="Sesión de Cloudflare Access">👤 {me.email}</span>

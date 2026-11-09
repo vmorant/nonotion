@@ -101,7 +101,7 @@ export const baseExtensions = [
   }),
 ];
 
-export default function Editor({ initialContent, onChange, onFileUploaded, pageId, pages = [], onReady, onFocusChange }) {
+export default function Editor({ initialContent, onChange, onFileUploaded, pageId, pages = [], onReady, onFocusChange, editable = true }) {
   const fileInputRef = useRef(null);
   const wrapRef = useRef(null);
   const pagesRef = useRef(pages);
@@ -151,6 +151,7 @@ export default function Editor({ initialContent, onChange, onFileUploaded, pageI
   };
 
   const editor = useEditor({
+    editable,
     extensions: [
       ...baseExtensions,
       TabHandler,
@@ -254,6 +255,11 @@ export default function Editor({ initialContent, onChange, onFileUploaded, pageI
   const editorRef = useRef(null);
   editorRef.current = editor;
   const issueSig = (pages || []).filter((p) => p.issue_key).map((p) => `${p.issue_key}:${p.issue_status}:${p.title}`).join('|');
+  // El rol (solo lectura o no) puede llegar después de montar el editor
+  useEffect(() => {
+    if (editor && editor.isEditable !== editable) editor.setEditable(editable);
+  }, [editor, editable]);
+
   useEffect(() => {
     if (editor && !editor.isDestroyed) editor.view.dispatch(editor.state.tr.setMeta(issueRefsKey, true));
   }, [editor, issueSig]);

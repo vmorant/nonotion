@@ -133,7 +133,7 @@ function findAssignee(text) {
   const dash = text.match(/\s[—–-]\s*([\p{Lu}][\p{L}]+(?:\s[\p{Lu}][\p{L}]+)?)\s*$/u);
   return dash ? dash[1] : null;
 }
-const cleanTitle = (t) =>
+const cleanTitleBase = (t) =>
   t
     .replace(/@[\p{L}\p{N}._-]+/gu, '')
     .replace(/\(([^()]{2,40})\)\s*$/, '')
@@ -142,8 +142,15 @@ const cleanTitle = (t) =>
     .replace(/\s[—–-]\s*$/, '')
     .replace(/[*_`]/g, '')
     .replace(/\s{2,}/g, ' ')
-    .trim()
-    .replace(/[,;:.]+$/, '');
+    .trim();
+// Quita la puntuación final sin regex: /[,;:.]+$/ es cuadrática con líneas
+// llenas de comas y bloqueaba el servidor entero durante segundos
+const trimEndPunct = (t) => {
+  let i = t.length;
+  while (i > 0 && ',;:. '.includes(t[i - 1])) i--;
+  return t.slice(0, i);
+};
+const cleanTitle = (t) => trimEndPunct(cleanTitleBase(t));
 
 export function detectProposals(markdown, { date = null, title = '' } = {}) {
   const baseYear = Number((date || new Date().toISOString()).slice(0, 4));
@@ -151,7 +158,9 @@ export function detectProposals(markdown, { date = null, title = '' } = {}) {
   const decisions = [];
   let section = '';
   for (const raw of String(markdown || '').split('\n')) {
-    const line = raw.trim();
+    // Ninguna línea de un acta real pasa de unos cientos de caracteres; cortar
+    // en 2.000 acota el coste de todas las expresiones regulares de abajo
+    const line = raw.slice(0, 2000).trim();
     const h = line.match(/^#{1,6}\s+(.*)$/);
     if (h) {
       section = fold(h[1]);

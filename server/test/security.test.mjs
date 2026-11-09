@@ -6,6 +6,7 @@ import { DATA_DIR } from './setup.mjs';
 import test, { before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import crypto from 'node:crypto';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
@@ -177,7 +178,9 @@ test('una página nunca se crea bajo un padre en la papelera ni bajo una idea, y
   const db = new Database(path.join(DATA_DIR, 'nonotion.db'));
   db.prepare(`UPDATE pages SET trashed_at = datetime('now') WHERE id = ?`).run(p2.id);
   db.close();
-  await call(`/api/trash/${p2.id}`, tokA, { method: 'DELETE' });
+  // borrar para siempre es cosa de administradores: un token (Claude, scripts) no puede
+  assert.equal((await call(`/api/trash/${p2.id}`, tokA, { method: 'DELETE' })).status, 403);
+  assert.equal((await fetch(`${BASE}/api/trash/${p2.id}`, { method: 'DELETE' })).status, 200); // propietario (modo local)
   const c = (await call(`/api/pages/${child.id}`, tokA)).json;
   assert.equal(c.title, 'Hija viva', 'la hija viva sobrevive');
   assert.equal(c.parent_id, null, 'y pasa a la raíz');
@@ -205,7 +208,8 @@ test('un cuerpo grande sin autenticación no llega a procesarse en el MCP', asyn
 test('el registro no muestra el token y revocarlo sobrevive al reinicio', async () => {
   assert.ok(!logOf().includes(tokA), 'el token no aparece entero en el registro');
   const db = new Database(path.join(DATA_DIR, 'nonotion.db'));
-  db.prepare('DELETE FROM api_tokens WHERE token = ?').run(tokA); // revocado desde Ajustes
+  // revocado desde Ajustes (en la base de datos solo está su hash)
+  db.prepare('DELETE FROM api_tokens WHERE token = ?').run('sha256:' + crypto.createHash('sha256').update(tokA).digest('hex'));
   db.close();
   await stop();
   logOf = await start();

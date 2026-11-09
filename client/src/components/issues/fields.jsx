@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { Check, X } from 'lucide-react';
 import { isOverdue } from './model.js';
+import { safeHref } from '../../fileLinks.js';
 
 // Editores en línea de los campos de un ticket (tabla, tablero y ficha):
 // desplegables con opciones de color, varias opciones, texto, número, fecha,
@@ -148,8 +149,9 @@ export function FieldEditor({ field, value, category, onChange, peopleListId, re
     case 'person':
       return <InlineInput value={value} placeholder="—" list={peopleListId} onCommit={onChange} disabled={readOnly} className="field-person" />;
     case 'url':
-      return readOnly && value ? (
-        <a href={value} target="_blank" rel="noreferrer" onClick={(e) => e.stopPropagation()}>
+      // Solo http(s)/mailto: un valor antiguo (p. ej. de un campo que era de texto) nunca es un enlace javascript:
+      return readOnly && value && safeHref(value) ? (
+        <a href={safeHref(value)} target="_blank" rel="noreferrer" onClick={(e) => e.stopPropagation()}>
           {value.replace(/^https?:\/\//, '').slice(0, 40)}
         </a>
       ) : (

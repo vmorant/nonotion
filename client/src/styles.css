@@ -7365,3 +7365,24 @@ kbd {
   top: calc(100% + 6px);
   z-index: 60;
 }
+
+/* Conector recién creado: su URL solo se ve esta vez */
+.ws-token-fresh {
+  border: 1px solid var(--accent);
+  background: var(--accent-soft);
+  border-radius: var(--radius);
+  padding: 10px 12px;
+  margin-bottom: 10px;
+  font-size: 0.85rem;
+}
+
+.ws-token-fresh .ws-row {
+  margin-top: 8px;
+  align-items: center;
+}
+
+.ws-token-fresh .ws-token-url {
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
