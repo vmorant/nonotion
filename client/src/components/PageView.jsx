@@ -75,6 +75,7 @@ export default function PageView({
   allTags = [],
   members = [],
   onMove,
+  readOnly = false, // rol «solo lectura» en este espacio
 }) {
   const { id } = useParams();
   const navigate = useNavigate();
@@ -227,6 +228,7 @@ export default function PageView({
 
   const queueSave = useCallback(
     (data) => {
+      if (readOnly) return; // el servidor lo rechazaría igualmente
       // Llamada desde una página que ya no está abierta (p. ej. una subida del
       // canvas que termina después de salir): se guarda aparte, en SU página, sin
       // tocar la cola de la página actual
@@ -250,7 +252,7 @@ export default function PageView({
       clearTimeout(saveTimer.current);
       saveTimer.current = setTimeout(flush, 700);
     },
-    [flush, id, persistDraft]
+    [flush, id, persistDraft, readOnly]
   );
 
   // Recarga el contenido desde el servidor y remonta el editor. Si había
@@ -685,7 +687,7 @@ export default function PageView({
         }
       >
         <div className="page-head">
-          <button className="page-icon" data-emoji-anchor onClick={() => setEmojiOpen((v) => !v)} title="Cambiar icono">
+          <button className="page-icon" data-emoji-anchor disabled={readOnly} onClick={() => setEmojiOpen((v) => !v)} title={readOnly ? undefined : 'Cambiar icono'}>
             {page.icon || '📄'}
           </button>
           {emojiOpen && (
@@ -700,6 +702,7 @@ export default function PageView({
           )}
           <input
             className="page-title"
+            readOnly={readOnly}
             value={page.title}
             placeholder="Sin título"
             onChange={(e) => {
@@ -774,6 +777,7 @@ export default function PageView({
           onChange={({ json, text }) => queueSave({ content: json, content_text: text })}
           onFocusChange={(f) => (focusedRef.current = f)}
           onFileUploaded={(f) => setFiles((prev) => [...prev, f])}
+          editable={!readOnly}
         />
         )}
 

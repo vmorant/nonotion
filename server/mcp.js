@@ -9,7 +9,7 @@ import { z } from 'zod';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import db, { DATA_DIR } from './db.js';
-import { lookupToken } from './workspaces.js';
+import { lookupToken, tokenWorkspaceName } from './workspaces.js';
 import { normalizeTag } from './tags.js';
 import { markdownToDoc } from './markdown.js';
 import { issueHeaderMarkdown, issueRelationsMarkdown, issueTimelineMarkdown } from './issues.js';
@@ -1304,9 +1304,9 @@ export function mountMcp(app, port) {
   app.get('/mcp/:token', reject);
   app.delete('/mcp/:token', reject);
 
-  const ws = db.prepare('SELECT w.name FROM api_tokens t JOIN workspaces w ON w.id = t.workspace_id WHERE t.token = ?').get(legacyToken);
+  const wsName = tokenWorkspaceName(legacyToken);
   console.log(`MCP activo: POST /mcp/<token> (un token por espacio y persona: Ajustes del espacio → Conector de Claude)`);
   // Nunca el token entero en el registro (journald lo guarda y puede leerlo más gente)
-  if (ws) console.log(`  Conector histórico del espacio "${ws.name}": /mcp/${legacyToken.slice(0, 4)}… (cópialo desde Ajustes del espacio)`);
+  if (wsName) console.log(`  Conector histórico del espacio "${wsName}": /mcp/${legacyToken.slice(0, 4)}… (la URL completa está en ${path.join(DATA_DIR, 'mcp_token')})`);
   return legacyToken;
 }

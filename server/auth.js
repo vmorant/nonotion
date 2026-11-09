@@ -1,9 +1,10 @@
 // Login con GitHub (OAuth) a nivel de aplicación.
 //
 // Se activa cuando /etc/nonotion.env define GITHUB_CLIENT_ID, GITHUB_CLIENT_SECRET,
-// AUTH_ALLOWED_GITHUB_USERS y PUBLIC_URL. Sin esas variables la app funciona como
-// antes (protegida solo por Cloudflare Access). Si están a medias, falla cerrado:
-// nadie entra hasta completar la configuración.
+// AUTH_ALLOWED_GITHUB_USERS y PUBLIC_URL. Falla SIEMPRE cerrado: si están a medias,
+// o si en producción (NODE_ENV=production) no hay login configurado, nadie entra.
+// Para usar la app sin login (solo detrás de Cloudflare Access, o en local) hay
+// que pedirlo explícitamente con AUTH_MODE=off.
 //
 // Quedan fuera del login, por diseño:
 //   - /mcp/<token>            (el conector de Claude, protegido por su token)
@@ -16,11 +17,28 @@
 // algún espacio (se añaden desde la app, sin reiniciar).
 import crypto from 'crypto';
 import db from './db.js';
-import { loginAllowed, lookupToken, setAuthMode } from './workspaces.js';
+import { loginAllowed, lookupToken, setAuthMode, bindIdentity, identityMatches } from './workspaces.js';
 
-const SESSION_DAYS = 30;
-const SESSION_COOKIE = 'nn_session';
-const STATE_COOKIE = 'nn_oauth';
+const SESSION_DAYS = 30; // deslizante: se renueva con el uso…
+const SESSION_MAX_DAYS = 90; // …pero ninguna sesión dura más que esto desde el login
+
+// Límite de intentos por IP (detrás del túnel de Cloudflare, la IP real llega en
+// CF-Connecting-IP; el puerto no debe ser accesible sin pasar por el túnel)
+const buckets = new Map();
+export function clientIp(req) {
+  return String(req.headers['cf-connecting-ip'] || req.socket?.remoteAddress || '?').slice(0, 64);
+}
+export function rateLimited(key, max, windowMs) {
+  const now = Date.now();
+  let b = buckets.get(key);
+  if (!b || b.reset < now) {
+    b = { n: 0, reset: now + windowMs };
+    buckets.set(key, b);
+  }
+  b.n++;
+  if (buckets.size > 50000) for (const [k, v] of buckets) if (v.reset < now) buckets.delete(k);
+  return b.n > max;
+}
 
 export function authConfig() {
   const clientId = (process.env.GITHUB_CLIENT_ID || '').trim();
@@ -31,8 +49,12 @@ export function authConfig() {
     .filter(Boolean);
   const publicUrl = (process.env.PUBLIC_URL || '').trim().replace(/\/+$/, '');
   const complete = Boolean(clientId && clientSecret && allowed.length && publicUrl);
-  const started = Boolean(clientId || clientSecret);
-  return { clientId, clientSecret, allowed, publicUrl, mode: complete ? 'github' : started ? 'misconfigured' : 'off' };
+  const explicitOff = /^off$/i.test((process.env.AUTH_MODE || '').trim());
+  // Cualquier pista de que se quería login (o estar en producción sin pedir AUTH_MODE=off)
+  // y no estar completo = cerrado. Nunca se abre por un fichero de entorno perdido o mal escrito.
+  const wanted = Boolean(clientId || clientSecret || allowed.length) || (process.env.NODE_ENV === 'production' && !explicitOff);
+  const mode = complete ? 'github' : wanted ? 'misconfigured' : explicitOff || process.env.NODE_ENV !== 'production' ? 'off' : 'misconfigured';
+  return { clientId, clientSecret, allowed, publicUrl, mode };
 }
 
 const sha256 = (s) => crypto.createHash('sha256').update(s).digest('hex');
@@ -94,6 +116,8 @@ const escapeHtml = (s) =>
 
 const LOGIN_ERRORS = {
   denied: 'Esa cuenta de GitHub no tiene acceso a este NoNotion.',
+  identity:
+    'Ese nombre de GitHub pertenece ahora a otra cuenta distinta de la que tenía acceso. Un propietario debe volver a darle acceso.',
   state: 'La sesión de login caducó o no es válida. Vuelve a intentarlo.',
   github: 'GitHub no completó el login. Vuelve a intentarlo.',
   config: 'El login con GitHub no está configurado en el servidor.',
@@ -159,6 +183,18 @@ export function setupAuth(app) {
   const cfg = authConfig();
   setAuthMode(cfg.mode);
   const secure = cfg.publicUrl.startsWith('https://');
+  // Con https, prefijo __Host-: el navegador solo la acepta de este mismo host
+  // (ningún subdominio hermano puede plantarla ni pisarla)
+  const SESSION_COOKIE = secure ? '__Host-nn_session' : 'nn_session';
+  const STATE_COOKIE = secure ? '__Host-nn_oauth' : 'nn_oauth';
+  const sameSiteWrite = (req) => {
+    // Escrituras con cookie: deben venir de nuestra propia web. Los navegadores
+    // mandan Origin en todo POST/PUT/DELETE; si faltara, se mira Referer.
+    const origin = req.headers.origin;
+    if (origin) return origin === cfg.publicUrl;
+    const ref = req.headers.referer || '';
+    return ref === cfg.publicUrl || ref.startsWith(cfg.publicUrl + '/');
+  };
   if (cfg.mode === 'github') {
     console.log(`Login con GitHub activo (${cfg.allowed.length} propietario/s; más los miembros de cada espacio)`);
   } else if (cfg.mode === 'misconfigured') {
@@ -166,7 +202,7 @@ export function setupAuth(app) {
       'Login con GitHub A MEDIAS: faltan GITHUB_CLIENT_ID, GITHUB_CLIENT_SECRET, AUTH_ALLOWED_GITHUB_USERS o PUBLIC_URL. Acceso bloqueado hasta completarlo.'
     );
   } else {
-    console.log('Login con GitHub desactivado (sin GITHUB_CLIENT_ID): acceso protegido solo por Cloudflare Access');
+    console.log('Login con GitHub desactivado (AUTH_MODE=off o modo local): acceso protegido solo por Cloudflare Access');
   }
 
   // Cabeceras de seguridad básicas para todas las respuestas
@@ -176,6 +212,7 @@ export function setupAuth(app) {
       'Referrer-Policy': 'same-origin',
       'X-Frame-Options': 'SAMEORIGIN',
     });
+    if (secure) res.set('Strict-Transport-Security', 'max-age=31536000');
     next();
   });
 
@@ -185,7 +222,11 @@ export function setupAuth(app) {
     req.authKind = null;
     const header = req.headers.authorization || '';
     if (header.startsWith('Bearer ')) {
+      const ip = clientIp(req);
       const t = lookupToken(header.slice(7).trim());
+      if (!t && rateLimited(`badtoken:${ip}`, 30, 10 * 60_000)) {
+        return res.status(429).json({ error: 'Demasiados intentos con un token no válido; espera unos minutos' });
+      }
       if (t) {
         req.user = { login: t.github_login || 'api-token' };
         req.authKind = 'token';
@@ -198,10 +239,13 @@ export function setupAuth(app) {
     const sid = parseCookies(req.headers.cookie)[SESSION_COOKIE];
     if (!sid) return next();
     const row = db
-      .prepare(`SELECT * FROM sessions WHERE id = ? AND expires_at > datetime('now')`)
-      .get(sha256(sid));
-    // Quitar a alguien (de los propietarios o de todos sus espacios) le corta el acceso
-    if (row && loginAllowed(row.github_login)) {
+      .prepare(
+        `SELECT * FROM sessions WHERE id = ? AND expires_at > datetime('now') AND created_at > datetime('now', ?)`
+      )
+      .get(sha256(sid), `-${SESSION_MAX_DAYS} days`);
+    // Quitar a alguien (de los propietarios o de todos sus espacios) le corta el acceso,
+    // y una cuenta de GitHub distinta que herede el mismo nombre no entra
+    if (row && loginAllowed(row.github_login) && identityMatches(row.github_login, row.github_id)) {
       req.user = { login: row.github_login, name: row.name, avatar_url: row.avatar_url };
       req.authKind = 'session';
       // Sesión deslizante: renovamos como mucho una vez por hora
@@ -217,6 +261,14 @@ export function setupAuth(app) {
     const next = safeNext(req.query.next);
     if (cfg.mode === 'off' || req.authKind === 'session') return res.redirect(next);
     res.type('html').send(loginPage({ next, error: cfg.mode === 'misconfigured' ? 'config' : req.query.error }));
+  });
+
+  // Login: como mucho 30 intentos cada 10 minutos por IP
+  app.use('/auth/', (req, res, next) => {
+    if (rateLimited(`auth:${clientIp(req)}`, 30, 10 * 60_000)) {
+      return res.status(429).type('text').send('Demasiados intentos de login; espera unos minutos.');
+    }
+    next();
   });
 
   app.get('/auth/github', (req, res) => {
@@ -285,6 +337,13 @@ export function setupAuth(app) {
         res.setHeader('Set-Cookie', clearState);
         return res.redirect('/login?error=denied');
       }
+      // El acceso es del nombre de GitHub, pero queda atado a la cuenta (id numérico)
+      // que lo usó la primera vez: si alguien hereda el nombre tras un cambio, no entra
+      if (!Number.isInteger(u.id) || !bindIdentity(u.login, u.id)) {
+        console.warn(`Login denegado: "${u.login}" es ahora otra cuenta de GitHub (id ${u.id})`);
+        res.setHeader('Set-Cookie', clearState);
+        return res.redirect('/login?error=identity');
+      }
 
       const sessionToken = crypto.randomBytes(32).toString('base64url');
       db.prepare(
@@ -313,8 +372,14 @@ export function setupAuth(app) {
   });
 
   app.post('/auth/logout', (req, res) => {
+    if (cfg.mode === 'github' && !sameSiteWrite(req)) return res.status(403).json({ error: 'Origen no permitido' });
     const sid = parseCookies(req.headers.cookie)[SESSION_COOKIE];
-    if (sid) db.prepare('DELETE FROM sessions WHERE id = ?').run(sha256(sid));
+    if (sid) {
+      const row = db.prepare('SELECT github_login FROM sessions WHERE id = ?').get(sha256(sid));
+      // ?all=1 cierra también las sesiones de esa cuenta en los demás dispositivos
+      if (row && req.query.all === '1') db.prepare('DELETE FROM sessions WHERE github_login = ?').run(row.github_login);
+      db.prepare('DELETE FROM sessions WHERE id = ?').run(sha256(sid));
+    }
     res.setHeader('Set-Cookie', cookieString(SESSION_COOKIE, '', { maxAge: 0, secure }));
     if (req.accepts(['html', 'json']) === 'json') return res.json({ ok: true });
     res.redirect('/login');
@@ -328,9 +393,8 @@ export function setupAuth(app) {
     }
     if (req.user) {
       // Anti-CSRF: con cookie de sesión, las escrituras deben venir de nuestro dominio
-      if (req.authKind === 'session' && !['GET', 'HEAD', 'OPTIONS'].includes(req.method)) {
-        const origin = req.headers.origin;
-        if (origin && origin !== cfg.publicUrl) return res.status(403).json({ error: 'Origen no permitido' });
+      if (req.authKind === 'session' && !['GET', 'HEAD', 'OPTIONS'].includes(req.method) && !sameSiteWrite(req)) {
+        return res.status(403).json({ error: 'Origen no permitido' });
       }
       return next();
     }

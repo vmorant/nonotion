@@ -11,19 +11,33 @@ WorkingDirectory=/opt/nonotion
 Environment=NODE_ENV=production
 Environment=PORT=3000
 Environment=DATA_DIR=/var/lib/nonotion
-# Login con GitHub y URL pública (ver README). El "-" lo hace opcional.
-EnvironmentFile=-/etc/nonotion.env
+# Login con GitHub y URL pública (ver README). Obligatorio: si falta, el
+# servicio no arranca (antes arrancaba sin login).
+EnvironmentFile=/etc/nonotion.env
 ExecStart=/usr/bin/node server/index.js
 Restart=always
 RestartSec=3
 TimeoutStopSec=20
 
-# Endurecimiento básico
+# Endurecimiento: solo puede escribir en sus datos, sin acceso a /home, a
+# dispositivos ni a ajustes del kernel, y con la memoria acotada (el contenedor
+# tiene ~1 GB: así un pico de NoNotion no se lleva por delante el resto)
 NoNewPrivileges=true
-ProtectSystem=full
+ProtectSystem=strict
 ProtectHome=true
 PrivateTmp=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+RestrictRealtime=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
 ReadWritePaths=/var/lib/nonotion
+UMask=0077
+MemoryHigh=700M
+MemoryMax=850M
 
 [Install]
 WantedBy=multi-user.target

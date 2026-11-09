@@ -283,6 +283,7 @@ export default function App() {
                 allTags={tags}
                 members={members}
                 onMove={movePage}
+                readOnly={workspaces?.find((w) => w.id === ws)?.role === 'viewer'}
               />
             }
           />

@@ -220,7 +220,7 @@ export const api = {
   versions: (pageId) => req(`/api/pages/${pageId}/versions`),
   version: (vid) => req(`/api/versions/${vid}`),
   restoreVersion: (pageId, vid) => req(`/api/pages/${pageId}/restore-version/${vid}`, { method: 'POST' }),
-  logout: () => req('/auth/logout', { method: 'POST', headers: { Accept: 'application/json' } }),
+  logout: ({ all = false } = {}) => req(`/auth/logout${all ? '?all=1' : ''}`, { method: 'POST', headers: { Accept: 'application/json' } }),
   // Espacios, miembros y conectores de Claude
   workspaces: () => req('/api/workspaces'),
   createWorkspace: (data) => req('/api/workspaces', { method: 'POST', body: JSON.stringify(data) }),
@@ -245,7 +245,8 @@ export function parseContent(content) {
   if (!content) return '';
   if (typeof content === 'string' && content.trim().startsWith('{')) {
     try {
-      return JSON.parse(content);
+      // sin claves __proto__: Tiptap 2 las convertiría en atributos HTML (GHSA-cp6q-959q-f8rh)
+      return JSON.parse(content, (k, v) => (k === '__proto__' ? undefined : v));
     } catch {
       return content;
     }

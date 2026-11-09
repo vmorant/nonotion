@@ -182,13 +182,13 @@ NoNotion expone un **servidor MCP remoto** en `https://notas.tudominio.com/mcp/<
 
 ### El token
 
-Cada espacio tiene sus conectores (uno por persona) en **⚙ Ajustes del espacio → Conector de Claude**: ahí se crean, se copian y se revocan. Además existe el token histórico del espacio inicial, que se genera al arrancar en `DATA_DIR/mcp_token` (por defecto `/var/lib/nonotion/mcp_token`). Para verlo:
+Cada espacio tiene sus conectores (uno por persona) en **⚙ Ajustes del espacio → Conector de Claude**: ahí se crean y se revocan. La URL completa se muestra **una sola vez, al crearlo**: en la base de datos (y en las copias de seguridad) solo queda su hash, así que quien lea una copia no puede usarlo. Si la pierdes, crea otro y revoca el antiguo. Además existe el token histórico del espacio inicial, que se genera al arrancar en `DATA_DIR/mcp_token` (por defecto `/var/lib/nonotion/mcp_token`). Para verlo:
 
 ```bash
 cat /var/lib/nonotion/mcp_token      # o: journalctl -u nonotion | grep MCP
 ```
 
-Para rotarlo: borra el archivo y reinicia (`systemctl restart nonotion`).
+Para rotarlo: revócalo en Ajustes del espacio, borra el archivo y reinicia (`systemctl restart nonotion`).
 
 > ⚠️ **La URL es la credencial**: quien tenga `https://.../mcp/<token>` puede leer y escribir todo el espacio de ese conector. No la compartas ni la pegues en sitios públicos.
 
@@ -275,7 +275,7 @@ En `skills/nonotion/SKILL.md` hay una skill lista para tu Claude: cópiala a `~/
 | GET/POST | `/api/workspaces` | Espacios accesibles / crear espacio (propietarios) |
 | PATCH/DELETE | `/api/workspaces/:id` | Renombrar / borrar (solo vacío) |
 | GET | `/api/workspaces/:id/members` | Miembros del espacio |
-| PUT/DELETE | `/api/workspaces/:id/members/:login` | Añadir o cambiar rol (`{role: editor\|admin}`) / quitar |
+| PUT/DELETE | `/api/workspaces/:id/members/:login` | Añadir (propietarios) o cambiar rol (`{role: viewer\|editor\|admin}`) / quitar |
 | GET/POST | `/api/workspaces/:id/tokens` | Conectores de Claude del espacio / crear el tuyo |
 | DELETE | `/api/workspaces/:id/tokens/:prefijo` | Revocar un conector |
 | POST | `/api/pages/:id/prefs` | Favorita / ancho completo (`{favorite?, full_width?}`); no crea versión ni cambia la revisión |
@@ -295,7 +295,7 @@ En `skills/nonotion/SKILL.md` hay una skill lista para tu Claude: cópiala a `~/
 | GET | `/api/calendar?from=&to=` | Actividad y páginas con fecha por día (YYYY-MM-DD) |
 | GET | `/api/pages/:id/markdown` | Página convertida a Markdown + adjuntos |
 | POST | `/api/pages/:id/append` | Añadir Markdown al final (con snapshot de versión) |
-| POST | `/api/pages/:id/replace` | Sustituir un fragmento exacto del Markdown (`{find, replace}`; 404 si no está, 409 si es ambiguo) |
+| POST | `/api/pages/:id/replace` | Sustituir un fragmento exacto del Markdown (`{find_text, replace_text}`; 404 si no está, 409 si es ambiguo) |
 | GET | `/files/:id/text` | Texto extraído de un PDF/documento (hojas de cálculo en CSV) |
 | GET | `/files/:id/page/:n` | Página `n` de un PDF/documento como PNG |
 | GET | `/api/events` | Eventos en vivo (Server-Sent Events) cuando cambia el árbol o una página |
@@ -350,15 +350,17 @@ Una misma instancia puede alojar varios proyectos totalmente separados. Cada **e
 
 | Quién | Acceso |
 | --- | --- |
-| **Propietarios** (`AUTH_ALLOWED_GITHUB_USERS` en `/etc/nonotion.env`) | Todos los espacios, como administradores. Solo ellos crean y borran espacios. |
-| **Administrador** de un espacio | Lee y escribe en ese espacio y gestiona sus miembros. |
-| **Editor** de un espacio | Lee y escribe en ese espacio. |
+| **Propietarios** (`AUTH_ALLOWED_GITHUB_USERS` en `/etc/nonotion.env`) | Todos los espacios, como administradores. Solo ellos crean y borran espacios y dan acceso a cuentas nuevas. |
+| **Administrador** de un espacio | Lee y escribe; cambia el rol de los miembros o los quita, comparte páginas en público y borra para siempre de la papelera. |
+| **Editor** de un espacio | Lee y escribe (incluido mover a la papelera y restaurar). |
+| **Solo lectura** | Ve el espacio, pero no puede cambiar nada (solo marcar sus favoritas). |
+| Conector de Claude o token de API | Como un editor de ese espacio: no comparte en público ni borra para siempre. |
 | Cualquier otra cuenta de GitHub | No entra. |
 
 **Dar acceso a otro equipo**
 
 1. Selector de espacio (arriba a la izquierda) → **+ Nuevo espacio** (solo propietarios).
-2. **⚙ Ajustes del espacio** → **Miembros**: añade su usuario de GitHub como *Editor* o *Administrador*. No hace falta reiniciar ni tocar `/etc/nonotion.env`.
+2. **⚙ Ajustes del espacio** → **Miembros** (propietarios): añade su usuario de GitHub como *Solo lectura*, *Editor* o *Administrador*. Se comprueba en GitHub que la cuenta existe y el acceso queda atado a esa cuenta concreta. No hace falta reiniciar ni tocar `/etc/nonotion.env`.
 3. Esa persona entra en la misma URL con **Entrar con GitHub** y solo ve los espacios donde es miembro.
 
 Quitar a alguien de un espacio le corta el acceso al momento, incluidos sus conectores de Claude de ese espacio.
@@ -394,13 +396,18 @@ Además (o en lugar) de Cloudflare Access, NoNotion puede exigir login con GitHu
 
 Cómo funciona:
 
-- Sesiones de 30 días (se renuevan al usarla), guardadas en SQLite solo como hash; cookie `HttpOnly`, `Secure`, `SameSite=Lax`. Botón **Salir** abajo a la izquierda.
+- Sesiones de 30 días (se renuevan al usarla) y nunca más de 90 desde el login, guardadas en SQLite solo como hash; cookie `__Host-nn_session`, `HttpOnly`, `Secure`, `SameSite=Lax`. Abajo a la izquierda: **Salir** y **Salir de todo** (cierra la sesión en todos tus dispositivos).
 - Solo se pide el permiso `read:user` (saber quién eres). El token de GitHub no se guarda.
+- **El acceso queda atado a la cuenta, no solo al nombre**: la primera vez que un nombre de GitHub entra (o cuando un propietario lo añade) se guarda el id numérico de esa cuenta. Si el nombre cambia de dueño (alguien se renombra y otra persona registra el nombre libre), la cuenta nueva no entra.
 - Quitar a un propietario de `AUTH_ALLOWED_GITHUB_USERS` y reiniciar le corta el acceso aunque tenga sesión; a un miembro se le quita desde los ajustes del espacio, sin reiniciar.
-- Si la configuración queda a medias, la app **se bloquea** (falla cerrada), nunca queda abierta.
-- Las escrituras con sesión deben venir de tu propio dominio (protección CSRF).
+- **Falla siempre cerrada**: si la configuración queda a medias, o falta del todo con `NODE_ENV=production` (el servicio), no entra nadie (503). Para usar la app sin login (solo detrás de Cloudflare Access) hay que pedirlo con `AUTH_MODE=off`.
+- Las escrituras con sesión deben venir de tu propio dominio (cabecera `Origin`, o `Referer` si faltara): protección CSRF.
+- Límites por IP: 30 intentos de login y 30 tokens no válidos cada 10 minutos. Sin sesión ni token, el servidor no lee el cuerpo de ninguna petición (las rutas públicas no lo necesitan).
+- La app se sirve con CSP (solo ejecuta sus propios scripts), HSTS, `nosniff` y sin poder enmarcarse en otras webs. Los adjuntos HTML se ven en un aislamiento sin acceso a la sesión, sin formularios ni descargas; LibreOffice convierte los documentos sin red.
 - Siguen públicos: el conector MCP (`/mcp/<token>`), los enlaces de compartir y los adjuntos de páginas compartidas.
 - Los scripts (`nonotion-send`) usan un token de API: el de un conector del espacio (Ajustes del espacio) o el histórico `cat /var/lib/nonotion/mcp_token` (espacio inicial).
+
+**El puerto 3000 no debe ser accesible sin pasar por el túnel.** Si cloudflared corre en la misma máquina, pon `HOST=127.0.0.1` en `/etc/nonotion.env`; si corre en otro contenedor, limita el puerto con el cortafuegos de Proxmox (o `nftables` en el LXC) a la IP de cloudflared.
 
 Con el login de GitHub activo puedes **quitar Cloudflare Access** del dominio principal (y las reglas Bypass de `/share/*`, `/files/*`, `/assets/*` y `/mcp/*`): la app ya protege cada ruta. O mantener ambos como doble capa.
 
